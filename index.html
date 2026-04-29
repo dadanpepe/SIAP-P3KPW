@@ -1068,12 +1068,37 @@
                                 <h2>Pengajuan Cuti</h2>
                                 <p>Ajukan cuti Anda dan lihat status pengajuan</p>
                             </div>
-                            <div class="leave-balance">
-                                <div class="balance-card">
-                                    <div class="balance-icon"><i class="fas fa-umbrella-beach"></i></div>
-                                    <div class="balance-content"><span class="balance-value">12</span><span
-                                            class="balance-label">Sisa Cuti (hari)</span></div>
+                            <div class="leave-balance-slider" id="leave-balance-slider">
+                                <button class="balance-nav balance-nav-left" id="balance-nav-left" type="button"><i class="fas fa-chevron-left"></i></button>
+                                <div class="balance-slider-track" id="balance-slider-track">
+                                    <div class="balance-card" data-type="annual">
+                                        <div class="balance-icon"><i class="fas fa-umbrella-beach"></i></div>
+                                        <div class="balance-content"><span class="balance-value" id="balance-annual">12</span><span
+                                                class="balance-label">Cuti Tahunan</span></div>
+                                    </div>
+                                    <div class="balance-card" data-type="large">
+                                        <div class="balance-icon"><i class="fas fa-calendar-alt"></i></div>
+                                        <div class="balance-content"><span class="balance-value" id="balance-large">3</span><span
+                                                class="balance-label">Cuti Besar</span></div>
+                                    </div>
+                                    <div class="balance-card" data-type="sick">
+                                        <div class="balance-icon"><i class="fas fa-heartbeat"></i></div>
+                                        <div class="balance-content"><span class="balance-value" id="balance-sick">12</span><span
+                                                class="balance-label">Cuti Sakit</span></div>
+                                    </div>
+                                    <div class="balance-card" data-type="maternity">
+                                        <div class="balance-icon"><i class="fas fa-baby"></i></div>
+                                        <div class="balance-content"><span class="balance-value" id="balance-maternity">90</span><span
+                                                class="balance-label">Cuti Melahirkan</span></div>
+                                    </div>
+                                    <div class="balance-card" data-type="important">
+                                        <div class="balance-icon"><i class="fas fa-home"></i></div>
+                                        <div class="balance-content"><span class="balance-value" id="balance-important">60</span><span
+                                                class="balance-label">Cuti Penting</span></div>
+                                    </div>
                                 </div>
+                                <button class="balance-nav balance-nav-right" id="balance-nav-right" type="button"><i class="fas fa-chevron-right"></i></button>
+                                <div class="balance-dots" id="balance-dots"></div>
                             </div>
                         </div>
                         <div class="cuti-grid">
@@ -1366,10 +1391,10 @@
                                         <option value="">Semua Lokasi</option>
                                         <option value="Kecamatan Cinere">Kecamatan Cinere</option>
                                         <option value="Kelurahan Cinere">Kelurahan Cinere</option>
-                                        <option value="Kelurahan Gandul">Kelurahan Gandul</option>
                                         <option value="Kelurahan Pangkalan Jati">Kelurahan Pangkalan Jati</option>
                                         <option value="Kelurahan Pangkalan Jati Baru">Kelurahan Pangkalan Jati Baru</option>
-                                     </select>
+                                        <option value="Kelurahan Gandul">Kelurahan Gandul</option>
+                                    </select>
                                 </div>
                                 <div class="filter-group"><label>Status</label><select id="report-status-filter">
                                         <option value="">Semua</option>
@@ -1688,7 +1713,7 @@
                                                 Keterlambatan</span><span class="setting-desc">Batas waktu toleransi
                                                 keterlambatan (menit)</span></div>
                                         <div class="setting-control"><input type="number" id="setting-late-tolerance"
-                                                value="15" min="0" max="510"></div>
+                                                value="15" min="0" max="60"></div>
                                     </div>
                                     <div class="setting-item">
                                         <div class="setting-info">
@@ -1742,22 +1767,7 @@
                                     </div>
                                     <div class="setting-item location-setting">
                                         <div class="setting-info">
-                                            <span class="setting-name">3. Lokasi Kantor Kelurahan Gandul</span>
-                                            <span class="setting-desc">Koordinat pusat kantor (Lat, Lng)</span>
-                                        </div>
-                                        <div class="location-controls">
-                                            <div class="coord-inputs">
-                                                <input type="text" id="setting-office-lat-5" placeholder="Latitude">
-                                                <input type="text" id="setting-office-lng-5" placeholder="Longitude">
-                                            </div>
-                                            <button type="button" class="btn-secondary btn-xs btn-get-loc" data-point="5">
-                                                <i class="fas fa-map-marker-alt"></i> Ambil Lokasi
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div class="setting-item location-setting">
-                                        <div class="setting-info">
-                                            <span class="setting-name">4. Lokasi Kantor Kelurahan Pangkalan Jati</span>
+                                            <span class="setting-name">3. Lokasi Kantor Kelurahan Pangkalan Jati</span>
                                             <span class="setting-desc">Koordinat pusat kantor (Lat, Lng)</span>
                                         </div>
                                         <div class="location-controls">
@@ -1772,7 +1782,7 @@
                                     </div>
                                     <div class="setting-item location-setting">
                                         <div class="setting-info">
-                                            <span class="setting-name">5. Lokasi Kantor Kelurahan Pangkalan Jati Baru</span>
+                                            <span class="setting-name">4. Lokasi Kantor Kelurahan Pangkalan Jati Baru</span>
                                             <span class="setting-desc">Koordinat pusat kantor (Lat, Lng)</span>
                                         </div>
                                         <div class="location-controls">
@@ -1781,6 +1791,21 @@
                                                 <input type="text" id="setting-office-lng-4" placeholder="Longitude">
                                             </div>
                                             <button type="button" class="btn-secondary btn-xs btn-get-loc" data-point="4">
+                                                <i class="fas fa-map-marker-alt"></i> Ambil Lokasi
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="setting-item location-setting">
+                                        <div class="setting-info">
+                                            <span class="setting-name">5. Lokasi Kantor Kelurahan Gandul</span>
+                                            <span class="setting-desc">Koordinat pusat kantor (Lat, Lng)</span>
+                                        </div>
+                                        <div class="location-controls">
+                                            <div class="coord-inputs">
+                                                <input type="text" id="setting-office-lat-5" placeholder="Latitude">
+                                                <input type="text" id="setting-office-lng-5" placeholder="Longitude">
+                                            </div>
+                                            <button type="button" class="btn-secondary btn-xs btn-get-loc" data-point="5">
                                                 <i class="fas fa-map-marker-alt"></i> Ambil Lokasi
                                             </button>
                                         </div>
@@ -1817,10 +1842,10 @@
                                             <select id="setting-signature-location" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-main);">
                                                 <option value="Kecamatan Cinere">Kecamatan Cinere</option>
                                                 <option value="Kelurahan Cinere">Kelurahan Cinere</option>
-                                                <option value="Kelurahan Gandul">Kelurahan Gandul</option>
                                                 <option value="Kelurahan Pangkalan Jati">Kelurahan Pangkalan Jati</option>
                                                 <option value="Kelurahan Pangkalan Jati Baru">Kelurahan Pangkalan Jati Baru</option>
-                                                </select>
+                                                <option value="Kelurahan Gandul">Kelurahan Gandul</option>
+                                            </select>
                                         </div>
                                     </div>
                                     <div class="setting-item">
