@@ -149,7 +149,7 @@ const adminDashboard = {
                 events.push({
                     id: `in_${att.date}_${name}`,
                     user: name,
-                    action: 'Clock In',
+                    action: 'Masuk',
                     timestamp: new Date(`${att.date} ${att.clockIn}`).getTime() || Date.now(),
                     time: dateTime.formatDate(att.date, 'short') + ' ' + att.clockIn,
                     avatar: getAvatarUrl({name})
