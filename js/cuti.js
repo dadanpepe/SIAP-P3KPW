@@ -151,29 +151,76 @@ const cuti = {
 
         const calculateDuration = () => {
             if (startDate.value && endDate.value) {
-                const count = dateTime.calculateWorkingDays(startDate.value, endDate.value);
-                duration.value = `${count} hari`;
+                const diffDays = dateTime.calculateWorkingDays(startDate.value, endDate.value);
+
+                if (diffDays > 0) {
+                    duration.value = `${diffDays} hari`;
+                } else if (startDate.value && endDate.value) {
+                    duration.value = '0 hari (Hari Libur)';
+                } else {
+                    duration.value = '0 hari';
+                }
             }
         };
 
         if (startDate) startDate.addEventListener('change', calculateDuration);
         if (endDate) endDate.addEventListener('change', calculateDuration);
 
-        // Auto-fill profile data if available
+        // Auto-fill profile data from backend
+        this._loadAndFillProfileData();
+    },
+
+    /**
+     * Load profile data from backend and fill form fields
+     */
+    async _loadAndFillProfileData() {
         const currentUser = auth.getCurrentUser();
-        if (currentUser) {
-            if (document.getElementById('leave-nip')) document.getElementById('leave-nip').value = currentUser.nip || '';
-            if (document.getElementById('leave-jabatan')) document.getElementById('leave-jabatan').value = currentUser.position || '';
-            if (document.getElementById('leave-masa-kerja')) {
-                // Calculate masa kerja (years between joinDate and today)
-                if (currentUser.joinDate) {
-                    const join = new Date(currentUser.joinDate);
-                    const today = new Date();
-                    const diff = today.getFullYear() - join.getFullYear();
-                    document.getElementById('leave-masa-kerja').value = `${diff} Tahun`;
-                } else {
-                    document.getElementById('leave-masa-kerja').value = '-';
+        if (!currentUser) return;
+
+        try {
+            // Get full profile data from backend
+            const profileRes = await api.getEmployeeProfile(currentUser.id);
+            if (profileRes.success && profileRes.data) {
+                const profile = profileRes.data;
+                
+                // Fill NIP
+                if (document.getElementById('leave-nip')) {
+                    document.getElementById('leave-nip').value = profile.nip || '';
                 }
+                
+                // Fill Jabatan
+                if (document.getElementById('leave-jabatan')) {
+                    document.getElementById('leave-jabatan').value = profile.position || '';
+                }
+                
+                // Calculate and fill Masa Kerja
+                if (document.getElementById('leave-masa-kerja')) {
+                    if (profile.joinDate) {
+                        const join = new Date(profile.joinDate);
+                        const today = new Date();
+                        const diffYears = today.getFullYear() - join.getFullYear();
+                        const diffMonths = today.getMonth() - join.getMonth();
+                        
+                        // Adjust if birthday hasn't occurred this year
+                        let years = diffYears;
+                        if (diffMonths < 0 || (diffMonths === 0 && today.getDate() < join.getDate())) {
+                            years--;
+                        }
+                        
+                        document.getElementById('leave-masa-kerja').value = `${years} Tahun`;
+                    } else {
+                        document.getElementById('leave-masa-kerja').value = '-';
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to load profile data for form:', e);
+            // Fallback to currentUser data if available
+            if (document.getElementById('leave-nip')) {
+                document.getElementById('leave-nip').value = currentUser.nip || '';
+            }
+            if (document.getElementById('leave-jabatan')) {
+                document.getElementById('leave-jabatan').value = currentUser.position || '';
             }
         }
     },
@@ -205,13 +252,7 @@ const cuti = {
         const diffDays = dateTime.calculateWorkingDays(startDate.value, endDate.value);
 
         if (diffDays <= 0) {
-            const start = new Date(startDate.value);
-            const end = new Date(endDate.value);
-            if (end < start) {
-                toast.error('Tanggal selesai harus setelah tanggal mulai!');
-            } else {
-                toast.error('Cuti tidak dapat diajukan di hari libur (Sabtu/Minggu)!');
-            }
+            toast.error('Tanggal yang dipilih adalah hari libur atau urutan tanggal salah!');
             if (submitBtn) {
                 submitBtn.disabled = false;
                 submitBtn.innerHTML = 'Ajukan Cuti';
