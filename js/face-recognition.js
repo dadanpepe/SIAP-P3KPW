@@ -271,6 +271,7 @@ const faceRecognition = {
         }
 
         // 3. SUCCESS: Save Captured frame with FORCED DOWN-SAMPLING to 640px
+        // IMPORTANT: Generate dataURL BEFORE stopping camera to avoid blank frames
         const ctx = this.canvas.getContext('2d');
         const MAX_WIDTH = 640;
         const scale = Math.min(1, MAX_WIDTH / this.video.videoWidth);
@@ -279,17 +280,60 @@ const faceRecognition = {
         this.canvas.height = this.video.videoHeight * scale;
         
         console.log(`Resizing backup capture: ${this.video.videoWidth}x${this.video.videoHeight} -> ${this.canvas.width}x${this.canvas.height}`);
+        
+        // Ensure video has actual frame data before drawing
+        if (this.video.readyState < 2) {
+            console.warn('Video not ready, waiting for frame data...');
+            await new Promise(resolve => {
+                const onReady = () => {
+                    this.video.removeEventListener('canplay', onReady);
+                    resolve();
+                };
+                this.video.addEventListener('canplay', onReady);
+                // Timeout fallback to avoid infinite wait
+                setTimeout(resolve, 1000);
+            });
+        }
+        
         ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+        
+        // Verify the canvas is not blank (check a sample of pixel data)
+        try {
+            const sampleData = ctx.getImageData(
+                Math.floor(this.canvas.width / 2), 
+                Math.floor(this.canvas.height / 2), 
+                10, 10
+            ).data;
+            let isBlank = true;
+            for (let i = 0; i < sampleData.length; i += 4) {
+                // Check if any pixel has non-zero RGB (not all black)
+                if (sampleData[i] > 5 || sampleData[i+1] > 5 || sampleData[i+2] > 5) {
+                    isBlank = false;
+                    break;
+                }
+            }
+            if (isBlank) {
+                console.warn('Canvas capture was blank, retrying...');
+                // Wait a short time and try again
+                await new Promise(r => setTimeout(r, 200));
+                ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+            }
+        } catch (e) {
+            console.warn('Canvas pixel check failed:', e);
+        }
+        
+        // Generate dataURL BEFORE stopping camera (critical for mobile devices)
+        this.capturedPhotoDataUrl = this.canvas.toDataURL('image/jpeg', 0.7);
         
         this.currentDescriptor = descriptor;
         this.photoCaptured = true;
         this.stopCamera();
 
-        // Update UI Preview
+        // Update UI Preview - use saved dataURL, not regenerated from canvas
         const preview = document.getElementById('camera-preview');
         if (preview) {
             preview.innerHTML = `
-                <img src="${this.canvas.toDataURL('image/jpeg', 0.7)}" class="captured-photo" alt="Captured">
+                <img src="${this.capturedPhotoDataUrl}" class="captured-photo" alt="Captured">
                 <div class="verification-status show" id="verification-status">
                     <div class="status-icon"><i class="fas fa-check-circle"></i></div>
                     <p>${this.isRegistering ? 'Wajah Terdeteksi' : 'Wajah Terverifikasi'}</p>
@@ -357,7 +401,7 @@ const faceRecognition = {
                 latitude: this.position.coords.latitude,
                 longitude: this.position.coords.longitude
             } : null,
-            photo: this.canvas.toDataURL('image/jpeg', 0.7)
+            photo: this.capturedPhotoDataUrl || this.canvas.toDataURL('image/jpeg', 0.7)
         };
 
         storage.set('temp_attendance', attendanceData);
@@ -383,7 +427,7 @@ const faceRecognition = {
         if (typeof loader !== 'undefined') loader.show('Mendaftarkan wajah, mohon tunggu...');
         
         try {
-            const photo = this.canvas.toDataURL('image/jpeg', 0.7);
+            const photo = this.capturedPhotoDataUrl || this.canvas.toDataURL('image/jpeg', 0.7);
             
             // Normalize descriptor
             const descriptorArray = Array.from(this.currentDescriptor);
