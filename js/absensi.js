@@ -400,7 +400,7 @@ const absensi = {
                 e.preventDefault();
                 this.handleClockIn();
             });
-            console.log('Masuk button initialized, disabled:', btnClockIn.disabled);
+            console.log('Clock In button initialized, disabled:', btnClockIn.disabled);
         }
 
 
@@ -553,6 +553,9 @@ const absensi = {
             return;
         }
 
+        // Save local copy of photo for immediate UI preview (before server roundtrip)
+        const localPhotoBase64 = verificationData.photo || null;
+
         switch (action) {
             case 'clock-in':
                 this.attendanceData.clockIn = timeStr;
@@ -586,6 +589,25 @@ const absensi = {
 
         const result = await this.saveAttendance();
         if (result && result.success) {
+            // After server save, the verification photo might be replaced with a Drive URL.
+            // Preserve the original base64 photo for local UI display
+            if (localPhotoBase64 && action === 'clock-in') {
+                if (!this.attendanceData.verificationIn || !this.attendanceData.verificationIn.photo) {
+                    this.attendanceData.verificationIn = this.attendanceData.verificationIn || {};
+                    this.attendanceData.verificationIn.photo = localPhotoBase64;
+                }
+                // Also ensure the status ring photo source uses local base64
+                if (this.attendanceData.verification) {
+                    this.attendanceData.verification.photo = this.attendanceData.verification.photo || localPhotoBase64;
+                }
+            }
+            if (localPhotoBase64 && action === 'clock-out') {
+                if (!this.attendanceData.verificationOut || !this.attendanceData.verificationOut.photo) {
+                    this.attendanceData.verificationOut = this.attendanceData.verificationOut || {};
+                    this.attendanceData.verificationOut.photo = localPhotoBase64;
+                }
+            }
+
             // Only update UI and show success if save actually worked
             this.updateUI();
             this.renderTimeline();
@@ -596,7 +618,7 @@ const absensi = {
             // Notify Admin
             const recipientId = 'admin';
             const currentUser = auth.getCurrentUser();
-            const actionLabel = action === 'clock-in' ? 'Masuk' : (action === 'clock-out' ? 'Pulang' : 'Lembur');
+            const actionLabel = action === 'clock-in' ? 'Clock In' : (action === 'clock-out' ? 'Clock Out' : 'Lembur');
             notifications.add(recipientId, currentUser.name, `melakukan ${actionLabel}`, 'info');
         } else {
             // Handle error (e.g. Alfa rejected by server)
@@ -750,7 +772,7 @@ const absensi = {
                     break;
                 case 'waiting':
                     statusRing.classList.add('waiting');
-                    if (statusText) statusText.textContent = 'Siap Masuk';
+                    if (statusText) statusText.textContent = 'Siap Clock In';
                     if (statusSubtext) {
                         statusSubtext.innerHTML = `<span style="font-size:24px;color:var(--text-main);font-weight:700;">${dateTime.getCurrentTime()}</span><br>${dateTime.getCurrentDate()}`;
                     }
@@ -822,7 +844,7 @@ const absensi = {
                 btnClockIn.innerHTML = `
                     <div class="btn-icon"><i class="fas fa-sign-in-alt"></i></div>
                     <div class="btn-text">
-                        <span class="btn-label">Masuk</span>
+                        <span class="btn-label">Clock In</span>
                         <span class="btn-time" id="clock-in-time">--:--</span>
                     </div>
                 `;
