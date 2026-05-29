@@ -159,15 +159,56 @@ const faceRecognition = {
 
     async capturePhoto() {
         if (this.photoCaptured) return;
+        this.photoCaptured = true; // Set early to prevent double clicks
+
+        if (typeof loader !== 'undefined') loader.show('Memproses foto...');
+
+        // 1. IMMEDIATELY capture the frame to avoid blank images if user lowers phone
+        const ctx = this.canvas.getContext('2d');
+        const MAX_WIDTH = 640;
+        const vWidth = this.video.videoWidth || 640;
+        const vHeight = this.video.videoHeight || 480;
+        const scale = Math.min(1, MAX_WIDTH / vWidth);
         
-        // 1. Get current descriptor
-        // 1. Get current descriptor - using higher input size for better accuracy
-        const detections = await faceapi.detectSingleFace(this.video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 }))
+        this.canvas.width = Math.floor(vWidth * scale);
+        this.canvas.height = Math.floor(vHeight * scale);
+        
+        console.log(`Instant capture: ${vWidth}x${vHeight} -> ${this.canvas.width}x${this.canvas.height}`);
+        
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+        
+        // Generate dataURL immediately so we freeze the exact moment of click
+        this.capturedPhotoDataUrl = this.canvas.toDataURL('image/jpeg', 0.7);
+
+        // Update UI Preview immediately for UX
+        this.stopCamera();
+        const preview = document.getElementById('camera-preview');
+        if (preview) {
+            preview.innerHTML = `
+                <img src="${this.capturedPhotoDataUrl}" class="captured-photo" alt="Captured" style="width: 100%; height: 100%; object-fit: cover; border-radius: 16px;">
+                <div class="verification-status show" id="verification-status" style="bottom: 20px;">
+                    <div class="status-icon" style="background: var(--color-warning);"><i class="fas fa-spinner fa-spin"></i></div>
+                    <p>Memverifikasi Wajah...</p>
+                </div>
+            `;
+        }
+        
+        document.getElementById('btn-capture').style.display = 'none';
+        const regBtn = document.getElementById('btn-register-face');
+        if (regBtn) regBtn.style.display = 'none';
+
+        // 2. Run face detection on the captured canvas, NOT the video
+        const detections = await faceapi.detectSingleFace(this.canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 }))
                                        .withFaceLandmarks()
                                        .withFaceDescriptor();
 
         if (!detections) {
-            toast.error('Wajah tidak terdeteksi. Posisikan wajah di dalam bingkai.');
+            if (typeof loader !== 'undefined') loader.hide();
+            toast.error('Wajah tidak terdeteksi pada foto. Silakan coba lagi.');
+            this.photoCaptured = false;
+            this.retakePhoto();
             return;
         }
 
@@ -224,7 +265,10 @@ const faceRecognition = {
                 if (score >= faceMatchThreshold) { 
                     isMatch = true;
                 } else {
+                    if (typeof loader !== 'undefined') loader.hide();
                     toast.error(`Wajah tidak cocok! Akurasi: ${(score * 100).toFixed(1)}% (Minimal ${allSettings.face_match_threshold}%)`);
+                    this.photoCaptured = false;
+                    this.retakePhoto();
                     return;
                 }
 
@@ -235,7 +279,10 @@ const faceRecognition = {
 
                 if (!isNaN(offLat) && !isNaN(offLng)) {
                     if (!this.position) {
+                        if (typeof loader !== 'undefined') loader.hide();
                         toast.error('Gagal mendapatkan lokasi GPS. Pastikan GPS aktif.');
+                        this.photoCaptured = false;
+                        this.retakePhoto();
                         return;
                     }
 
@@ -249,6 +296,7 @@ const faceRecognition = {
                     console.log('Distance from Office:', dist, 'm | Max Allowed:', maxDistance, 'm');
 
                     if (dist > maxDistance) {
+                        if (typeof loader !== 'undefined') loader.hide();
                         modal.show(
                             'Di Luar Jangkauan',
                             `<div style="text-align:center; padding: 20px;">
@@ -256,89 +304,37 @@ const faceRecognition = {
                                 <p>Anda berada di luar radius absen yang diizinkan.</p>
                                 <p style="font-size: 14px; color: #666; margin-top: 10px;">Jarak Anda: <b>${dist.toFixed(0)}m</b><br>Maksimal: <b>${maxDistance}m</b></p>
                             </div>`,
-                            [{ label: 'Tutup', class: 'btn-secondary', onClick: () => modal.close() }]
+                            [{ label: 'Tutup', class: 'btn-secondary', onClick: () => { modal.close(); this.photoCaptured = false; this.retakePhoto(); } }]
                         );
                         return;
                     }
                 }
             } catch (e) {
                 console.error('Matching/Distance Error:', e);
+                if (typeof loader !== 'undefined') loader.hide();
                 toast.error('Terjadi kesalahan saat verifikasi data. Silakan coba lagi.');
+                this.photoCaptured = false;
+                this.retakePhoto();
                 return;
             }
         } else {
             isMatch = true; // Skip matching on registration
         }
 
-        // 3. SUCCESS: Save Captured frame with FORCED DOWN-SAMPLING to 640px
-        // IMPORTANT: Generate dataURL BEFORE stopping camera to avoid blank frames
-        const ctx = this.canvas.getContext('2d');
-        const MAX_WIDTH = 640;
-        const scale = Math.min(1, MAX_WIDTH / this.video.videoWidth);
-        
-        this.canvas.width = this.video.videoWidth * scale;
-        this.canvas.height = this.video.videoHeight * scale;
-        
-        console.log(`Resizing backup capture: ${this.video.videoWidth}x${this.video.videoHeight} -> ${this.canvas.width}x${this.canvas.height}`);
-        
-        // Ensure video has actual frame data before drawing
-        if (this.video.readyState < 2) {
-            console.warn('Video not ready, waiting for frame data...');
-            await new Promise(resolve => {
-                const onReady = () => {
-                    this.video.removeEventListener('canplay', onReady);
-                    resolve();
-                };
-                this.video.addEventListener('canplay', onReady);
-                // Timeout fallback to avoid infinite wait
-                setTimeout(resolve, 1000);
-            });
-        }
-        
-        ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
-        
-        // Verify the canvas is not blank (check a sample of pixel data)
-        try {
-            const sampleData = ctx.getImageData(
-                Math.floor(this.canvas.width / 2), 
-                Math.floor(this.canvas.height / 2), 
-                10, 10
-            ).data;
-            let isBlank = true;
-            for (let i = 0; i < sampleData.length; i += 4) {
-                // Check if any pixel has non-zero RGB (not all black)
-                if (sampleData[i] > 5 || sampleData[i+1] > 5 || sampleData[i+2] > 5) {
-                    isBlank = false;
-                    break;
-                }
-            }
-            if (isBlank) {
-                console.warn('Canvas capture was blank, retrying...');
-                // Wait a short time and try again
-                await new Promise(r => setTimeout(r, 200));
-                ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
-            }
-        } catch (e) {
-            console.warn('Canvas pixel check failed:', e);
-        }
-        
-        // Generate dataURL BEFORE stopping camera (critical for mobile devices)
-        this.capturedPhotoDataUrl = this.canvas.toDataURL('image/jpeg', 0.7);
-        
         this.currentDescriptor = descriptor;
-        this.photoCaptured = true;
-        this.stopCamera();
+        
+        if (typeof loader !== 'undefined') loader.hide();
 
-        // Update UI Preview - use saved dataURL, not regenerated from canvas
-        const preview = document.getElementById('camera-preview');
-        if (preview) {
-            preview.innerHTML = `
-                <img src="${this.capturedPhotoDataUrl}" class="captured-photo" alt="Captured">
-                <div class="verification-status show" id="verification-status">
-                    <div class="status-icon"><i class="fas fa-check-circle"></i></div>
+        // Update UI Preview with success status
+        const previewElement = document.getElementById('camera-preview');
+        if (previewElement) {
+            const verificationStatus = previewElement.querySelector('#verification-status');
+            if (verificationStatus) {
+                verificationStatus.innerHTML = `
+                    <div class="status-icon" style="background: var(--color-success);"><i class="fas fa-check-circle"></i></div>
                     <p>${this.isRegistering ? 'Wajah Terdeteksi' : 'Wajah Terverifikasi'}</p>
-                </div>
-            `;
+                `;
+            }
         }
 
         document.getElementById('btn-capture').style.display = 'none';
@@ -346,7 +342,7 @@ const faceRecognition = {
         
         if (this.isRegistering) {
             // Specifically for registration: Add a centered BIG button under the preview
-            const preview = document.getElementById('camera-preview');
+            const previewContainer = document.getElementById('camera-preview');
             const saveBtnContainer = document.createElement('div');
             saveBtnContainer.id = 'registration-save-container';
             saveBtnContainer.style.textAlign = 'center';
@@ -359,7 +355,7 @@ const faceRecognition = {
                     <i class="fas fa-redo"></i> Foto Ulang
                 </button>
             `;
-            preview.parentNode.appendChild(saveBtnContainer);
+            previewContainer.parentNode.appendChild(saveBtnContainer);
 
             // ATTACH LISTENERS DIRECTLY
             const saveBtn = document.getElementById('btn-save-registration');
@@ -471,7 +467,7 @@ const faceRecognition = {
 
         if (preview) {
             preview.innerHTML = `
-                <video id="camera-video" autoplay playsinline></video>
+                <video id="camera-video" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover; border-radius: 16px; transform: scaleX(-1);"></video>
                 <canvas id="camera-canvas" style="display: none;"></canvas>
                 <div class="face-overlay" id="face-overlay"><div class="face-frame"></div></div>
             `;
