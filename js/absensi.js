@@ -400,7 +400,7 @@ const absensi = {
                 e.preventDefault();
                 this.handleClockIn();
             });
-            console.log('Clock In button initialized, disabled:', btnClockIn.disabled);
+            console.log('Masuk button initialized, disabled:', btnClockIn.disabled);
         }
 
 
@@ -618,7 +618,7 @@ const absensi = {
             // Notify Admin
             const recipientId = 'admin';
             const currentUser = auth.getCurrentUser();
-            const actionLabel = action === 'clock-in' ? 'Clock In' : (action === 'clock-out' ? 'Clock Out' : 'Lembur');
+            const actionLabel = action === 'clock-in' ? 'Masuk' : (action === 'clock-out' ? 'Pulang' : 'Lembur');
             notifications.add(recipientId, currentUser.name, `melakukan ${actionLabel}`, 'info');
         } else {
             // Handle error (e.g. Alfa rejected by server)
@@ -772,7 +772,7 @@ const absensi = {
                     break;
                 case 'waiting':
                     statusRing.classList.add('waiting');
-                    if (statusText) statusText.textContent = 'Siap Clock In';
+                    if (statusText) statusText.textContent = 'Siap Masuk';
                     if (statusSubtext) {
                         statusSubtext.innerHTML = `<span style="font-size:24px;color:var(--text-main);font-weight:700;">${dateTime.getCurrentTime()}</span><br>${dateTime.getCurrentDate()}`;
                     }
@@ -844,7 +844,7 @@ const absensi = {
                 btnClockIn.innerHTML = `
                     <div class="btn-icon"><i class="fas fa-sign-in-alt"></i></div>
                     <div class="btn-text">
-                        <span class="btn-label">Clock In</span>
+                        <span class="btn-label">Masuk</span>
                         <span class="btn-time" id="clock-in-time">--:--</span>
                     </div>
                 `;
