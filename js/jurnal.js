@@ -27,6 +27,7 @@ const jurnal = {
             this.initForm();
             this.initFilters();
             this.initPhotoUpload();
+            this.initPdfSection();
             this.updateUI(); // Render with current state/cache
             this.renderJurnalList();
 
@@ -505,6 +506,82 @@ const jurnal = {
     editJurnal(date) {
         this.currentDate = new Date(date);
         this.updateUI();
+    },
+
+    /**
+     * Initialize PDF download section - set default month
+     */
+    initPdfSection() {
+        const monthInput = document.getElementById('jurnal-pdf-month');
+        if (monthInput && !monthInput.value) {
+            monthInput.value = new Date().toISOString().substring(0, 7);
+        }
+    },
+
+    /**
+     * Download Journal PDF for the current employee
+     */
+    async downloadPDF() {
+        const currentUser = auth.getCurrentUser();
+        if (!currentUser || !currentUser.id) {
+            toast.error('Silakan login terlebih dahulu');
+            return;
+        }
+
+        const monthInput = document.getElementById('jurnal-pdf-month');
+        const month = monthInput ? monthInput.value : new Date().toISOString().substring(0, 7);
+
+        if (!month) {
+            toast.error('Silakan pilih bulan terlebih dahulu');
+            return;
+        }
+
+        const btn = document.getElementById('btn-download-jurnal-pdf');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Menyiapkan PDF...</span>';
+        }
+
+        if (typeof loader !== 'undefined') loader.show('Menyiapkan dokumen PDF...');
+
+        try {
+            const res = await api.request('downloadJournalPDF', {
+                userId: currentUser.id,
+                month: month
+            });
+
+            if (res.success && res.data) {
+                const byteCharacters = atob(res.data);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], { type: 'application/pdf' });
+                
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = res.filename || `Jurnal_${currentUser.name || 'Karyawan'}_${month}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                
+                toast.success('PDF Jurnal berhasil diunduh!');
+            } else {
+                toast.error(res.error || 'Gagal mengunduh PDF');
+            }
+        } catch (e) {
+            console.error('Error downloading PDF:', e);
+            toast.error('Terjadi kesalahan saat mengunduh PDF');
+        } finally {
+            if (typeof loader !== 'undefined') loader.hide();
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-download"></i> <span>Download PDF Jurnal</span>';
+            }
+        }
     }
 };
 

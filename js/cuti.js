@@ -311,6 +311,11 @@ const cuti = {
                 this.leaves.unshift(result.data);
                 toast.success('Pengajuan cuti berhasil dikirim!');
 
+                // Push notification
+                if (typeof notifications !== 'undefined') {
+                    notifications.add('admin', currentUser.name, `mengajukan cuti ${typeLabels[type.value]}`, 'info');
+                }
+
                 // Reset form
                 e.target.reset();
                 document.getElementById('leave-duration').value = '';

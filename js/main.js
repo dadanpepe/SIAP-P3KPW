@@ -304,6 +304,7 @@ var notifications = {
             if (currentUser && currentUser.role === 'admin') {
                  // Admin deletes admin notifications
                  this.list = this.list.filter(n => n.targetUserId && n.targetUserId !== 'admin' && n.targetUserId !== 'all');
+                 storage.set('admin_notifications_cleared_at', Date.now());
             } else if (currentUser) {
                  // Employee deletes their own notifications
                  this.list = this.list.filter(n => n.targetUserId !== currentUser.id && n.targetUserId !== currentUser.email);
@@ -433,7 +434,7 @@ var dateTime = {
         var endTime = new Date('2000-01-01 ' + e);
         var diff = endTime - startTime;
 
-        // Handle night shifts (e.g., 16:30 to 06:00)
+        // Handle night shifts (e.g., 23:00 to 08:00)
         if (diff < 0) {
             endTime = new Date('2000-01-02 ' + end);
             diff = endTime - startTime;

@@ -235,7 +235,7 @@ const adminReports = {
                     ...j, date: rawDate,
                     employeeName: emp.name, department: emp.department,
                     tasks: rawTasks || '-',
-                    status: j.status || 'pending'
+                    status: 'approved'
                 };
             } catch (e) {
                 console.warn('Error processing individual jurnal entry:', e, j);
@@ -395,7 +395,6 @@ const adminReports = {
                 <td>${row.department}</td>
                 <td><div class="line-clamp-2">${row.tasks}</div></td>
                 <td>${row.photo ? `<img src="${normalizeImageUrl(row.photo)}" style="width:40px; height:40px; border-radius:4px; object-fit:cover; cursor:pointer;" onclick="adminReports.viewPhoto('${row.photo}')">` : '-'}</td>
-                <td><span class="status-badge ${row.status === 'filled' ? 'success' : 'warning'}">${row.status.toUpperCase()}</span></td>
                 <td><button class="btn-action view" onclick="adminReports.viewJurnalDetail('${row.userId}', '${row.date}')"><i class="fas fa-eye"></i></button></td>
             `;
             tbody.appendChild(tr);
@@ -406,7 +405,6 @@ const adminReports = {
                 card.innerHTML = `
                     <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
                         <span style="font-size:12px; font-weight:600">${row.date}</span>
-                        <span class="status-badge ${row.status === 'filled' ? 'success' : 'warning'}" style="font-size:10px;">${row.status.toUpperCase()}</span>
                     </div>
                     <div style="font-weight:600; margin-bottom:4px;">${row.employeeName}</div>
                     <div style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">${row.tasks}</div>

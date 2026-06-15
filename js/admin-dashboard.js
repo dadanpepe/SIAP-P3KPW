@@ -149,7 +149,7 @@ const adminDashboard = {
                 events.push({
                     id: `in_${att.date}_${name}`,
                     user: name,
-                    action: 'Masuk',
+                    action: 'Clock In',
                     timestamp: new Date(`${att.date} ${att.clockIn}`).getTime() || Date.now(),
                     time: dateTime.formatDate(att.date, 'short') + ' ' + att.clockIn,
                     avatar: getAvatarUrl({name})
@@ -159,7 +159,7 @@ const adminDashboard = {
                 events.push({
                     id: `out_${att.date}_${name}`,
                     user: name,
-                    action: 'Pulang',
+                    action: 'Clock Out',
                     timestamp: new Date(`${att.date} ${att.clockOut}`).getTime() || Date.now(),
                     time: dateTime.formatDate(att.date, 'short') + ' ' + att.clockOut,
                     avatar: getAvatarUrl({name})
@@ -182,6 +182,12 @@ const adminDashboard = {
         
         // Sort descending
         events.sort((a,b) => b.timestamp - a.timestamp);
+        
+        // Filter out events that occurred before the admin last cleared notifications
+        const lastCleared = storage.get('admin_notifications_cleared_at', 0);
+        if (lastCleared > 0) {
+            events = events.filter(e => e.timestamp > lastCleared);
+        }
         
         // Pass to global notifications
         if (window.notifications && typeof window.notifications.setList === 'function') {

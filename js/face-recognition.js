@@ -163,26 +163,32 @@ const faceRecognition = {
 
         if (typeof loader !== 'undefined') loader.show('Memproses foto...');
 
-        // 1. IMMEDIATELY capture the frame to avoid blank images if user lowers phone
-        const ctx = this.canvas.getContext('2d');
+        // 1. Capture the frame to an offscreen canvas to avoid black images when preview detaches
+        const offscreenCanvas = document.createElement('canvas');
+        const ctx = offscreenCanvas.getContext('2d');
         const MAX_WIDTH = 640;
         const vWidth = this.video.videoWidth || 640;
         const vHeight = this.video.videoHeight || 480;
         const scale = Math.min(1, MAX_WIDTH / vWidth);
         
-        this.canvas.width = Math.floor(vWidth * scale);
-        this.canvas.height = Math.floor(vHeight * scale);
+        offscreenCanvas.width = Math.floor(vWidth * scale);
+        offscreenCanvas.height = Math.floor(vHeight * scale);
         
-        console.log(`Instant capture: ${vWidth}x${vHeight} -> ${this.canvas.width}x${this.canvas.height}`);
+        console.log(`Instant capture: ${vWidth}x${vHeight} -> ${offscreenCanvas.width}x${offscreenCanvas.height}`);
         
         ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-        ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+        ctx.fillRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
         
-        // Generate dataURL immediately so we freeze the exact moment of click
-        this.capturedPhotoDataUrl = this.canvas.toDataURL('image/jpeg', 0.7);
+        // Mirror the drawing to match the camera preview
+        ctx.translate(offscreenCanvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(this.video, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+        ctx.setTransform(1, 0, 0, 1, 0, 0); // Restore
+        
+        // Generate dataURL immediately
+        this.capturedPhotoDataUrl = offscreenCanvas.toDataURL('image/jpeg', 0.8);
 
-        // Update UI Preview immediately for UX
+        // Update UI Preview
         this.stopCamera();
         const preview = document.getElementById('camera-preview');
         if (preview) {
@@ -199,8 +205,8 @@ const faceRecognition = {
         const regBtn = document.getElementById('btn-register-face');
         if (regBtn) regBtn.style.display = 'none';
 
-        // 2. Run face detection on the captured canvas, NOT the video
-        const detections = await faceapi.detectSingleFace(this.canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 }))
+        // 2. Run face detection on the offscreen canvas (detached from DOM)
+        const detections = await faceapi.detectSingleFace(offscreenCanvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 }))
                                        .withFaceLandmarks()
                                        .withFaceDescriptor();
 
@@ -208,7 +214,8 @@ const faceRecognition = {
             if (typeof loader !== 'undefined') loader.hide();
             toast.error('Wajah tidak terdeteksi pada foto. Silakan coba lagi.');
             this.photoCaptured = false;
-            this.retakePhoto();
+            // Delay a bit before re-initializing camera to avoid hardware lock causing black screen
+            setTimeout(() => this.retakePhoto(), 300);
             return;
         }
 

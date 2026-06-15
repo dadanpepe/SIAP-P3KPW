@@ -24,6 +24,7 @@ const adminReports = {
     
     // Caching state
     loadedMonths: { attendance: null, jurnal: null, leave: null, izin: null, employees: false },
+    initialized: false,
 
     /**
      * Helper: Safely bind event to element
@@ -62,6 +63,7 @@ const adminReports = {
         } catch (error) {
             console.error('Init attendance error:', error);
         } finally {
+            this.initialized = true;
             if (typeof loader !== 'undefined') loader.hide();
         }
     },
@@ -87,6 +89,7 @@ const adminReports = {
         } catch (error) {
             console.error('Init jurnal error:', error);
         } finally {
+            this.initialized = true;
             if (typeof loader !== 'undefined') loader.hide();
         }
     },
@@ -123,19 +126,19 @@ const adminReports = {
         // 1. Try to load from localStorage first (SWR pattern)
         if (!forceRefresh) {
             const cached = storage.get(cacheKey);
-            if (cached) {
+            if (cached && cached.employees && cached.employees.length > 0) {
                 console.log('Loading reports from cache:', targetMonth);
                 this.rawEmployees = cached.employees || [];
                 this.attendanceData = cached.attendanceData || [];
                 this.jurnalData = cached.jurnalData || [];
                 this.leaveData = cached.leaveData || [];
+                
                 this.loadedMonths = { 
                     attendance: targetMonth, jurnal: targetMonth, 
                     leave: targetMonth, izin: targetMonth, employees: true 
                 };
                 
-                // If we have cached data, we can return early to satisfy 'instant load'
-                // However, we still fetch in background to refresh the cache
+                if (typeof loader !== 'undefined') loader.hide();
                 this._backgroundFetch(targetMonth, cacheKey);
                 return;
             }
@@ -146,7 +149,7 @@ const adminReports = {
 
         try {
             const empRes = await api.getEmployees();
-            this.rawEmployees = empRes.data || [];
+            this.rawEmployees = (empRes && empRes.data) ? empRes.data : [];
             
             let attendances = [], jurnals = [], leaves = [], izinList = [];
             const [attRes, jurRes, leaRes, iznRes] = await Promise.all([
@@ -155,13 +158,15 @@ const adminReports = {
                 api.getAllLeaves(targetMonth),
                 api.getAllIzin(targetMonth)
             ]);
+            console.log(`[_backgroundFetch] Data fetched:`, { attRes, jurRes, leaRes, iznRes });
 
-            attendances = attRes.data || [];
-            jurnals = jurRes.data || [];
-            leaves = leaRes.data || [];
-            izinList = iznRes.data || [];
+            attendances = (attRes && attRes.data) ? attRes.data : [];
+            jurnals = (jurRes && jurRes.data) ? jurRes.data : [];
+            leaves = (leaRes && leaRes.data) ? leaRes.data : [];
+            izinList = (iznRes && iznRes.data) ? iznRes.data : [];
 
             this.processAllData(targetMonth, attendances, jurnals, leaves, izinList, cacheKey);
+            console.log(`[_backgroundFetch] Done.`);
 
         } catch (e) {
             console.error('Error loading report data:', e);
@@ -213,6 +218,14 @@ const adminReports = {
      * Process raw API data into formatted report models
      */
     processAllData(targetMonth, attendances, jurnals, leaves, izinList, cacheKey) {
+        console.log(`Processing all data for ${targetMonth}:`, { 
+            empCount: this.rawEmployees.length, 
+            attCount: attendances.length, 
+            jurCount: jurnals.length, 
+            leaCount: leaves.length, 
+            iznCount: izinList.length 
+        });
+
         this.loadedMonths = { 
             attendance: targetMonth, jurnal: targetMonth, 
             leave: targetMonth, izin: targetMonth, employees: true 
@@ -299,7 +312,7 @@ const adminReports = {
                     ...j, date: rawDate,
                     employeeName: emp.name, department: emp.department,
                     tasks: rawTasks || '-',
-                    status: j.status || 'pending'
+                    status: 'approved'
                 };
             } catch (e) {
                 console.warn('Error processing individual jurnal entry:', e, j);
@@ -309,7 +322,7 @@ const adminReports = {
 
         // 3. Process Leave/Izin Data
         this.leaveData = [
-            ...leaves.map(l => {
+            ...(leaves || []).map(l => {
                 const emp = this.getEmployeeInfo(l.userId);
                 const startDateStr = window.dateTime ? window.dateTime.formatDate(l.startDate, 'short') : l.startDate;
                 const endDateStr = window.dateTime ? window.dateTime.formatDate(l.endDate, 'short') : l.endDate;
@@ -320,7 +333,7 @@ const adminReports = {
                     duration: l.duration, status: (l.status || 'pending').toLowerCase(), reason: l.reason
                 };
             }),
-            ...izinList.map(i => {
+            ...(izinList || []).map(i => {
                 const emp = this.getEmployeeInfo(i.userId);
                 // Fallback to i.date for old data, but prefer startDate and endDate
                 const sDate = i.startDate || i.date;
@@ -377,7 +390,8 @@ const adminReports = {
         if (!this.leaveData) return [];
         const { type, status } = this.filters.leave;
         return this.leaveData.filter(l => {
-            const matchesType = !type || l.type.toLowerCase().includes(type.toLowerCase());
+            const lType = l.type ? String(l.type) : '';
+            const matchesType = !type || lType.toLowerCase().includes(type.toLowerCase());
             const matchesStatus = !status || l.status === status;
             return matchesType && matchesStatus;
         });
@@ -532,13 +546,6 @@ const adminReports = {
         }
 
         data.forEach(row => {
-            const statusLabels = { 'pending': 'Menunggu', 'approved': 'Disetujui', 'rejected': 'Ditolak', 'filled': 'Sudah Diisi' };
-            const lowerStatus = (row.status || '').toLowerCase();
-            const approvalButtons = (lowerStatus === 'pending' || lowerStatus === 'filled') ? `
-                <button type="button" class="btn-action" style="background:#10B981; border:none; color:#fff; cursor:pointer;" onclick="adminReports.approveJurnalItem('${row.id}')"><i class="fas fa-check"></i></button>
-                <button type="button" class="btn-action" style="background:#EF4444; border:none; color:#fff; cursor:pointer;" onclick="adminReports.rejectJurnalItem('${row.id}')"><i class="fas fa-times"></i></button>
-            ` : '';
-
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td>${row.date || '-'}</td>
@@ -546,11 +553,9 @@ const adminReports = {
                 <td>${row.department}</td>
                 <td><div class="line-clamp-2">${row.tasks}</div></td>
                 <td>${row.photo ? `<img src="${normalizeImageUrl(row.photo)}" style="width:40px; height:40px; border-radius:4px; object-fit:cover; cursor:pointer;" onclick="adminReports.viewPhoto('${row.photo}')">` : '-'}</td>
-                <td><span class="status-badge ${row.status}">${statusLabels[row.status] || row.status.toUpperCase()}</span></td>
                 <td>
                     <div style="display:flex; gap:4px;">
                         <button class="btn-action view" onclick="adminReports.viewJurnalDetail('${row.userId}', '${row.date}')"><i class="fas fa-eye"></i></button>
-                        ${approvalButtons}
                     </div>
                 </td>
             `;
@@ -562,16 +567,11 @@ const adminReports = {
                 card.innerHTML = `
                     <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
                         <span style="font-size:12px; font-weight:600">${row.date}</span>
-                        <span class="status-badge ${row.status}" style="font-size:10px;">${statusLabels[row.status] || row.status.toUpperCase()}</span>
                     </div>
                     <div style="font-weight:600; margin-bottom:4px;">${row.employeeName}</div>
                     <div style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">${row.tasks}</div>
-                    <div class="card-actions" style="display:grid; grid-template-columns: ${approvalButtons ? '1fr 1fr 1fr' : '1fr'}; gap:8px;">
+                    <div class="card-actions" style="display:grid; grid-template-columns: 1fr; gap:8px;">
                         <button class="btn-full btn-sm" onclick="adminReports.viewJurnalDetail('${row.userId}', '${row.date}')"><i class="fas fa-eye"></i> Detail</button>
-                        ${approvalButtons ? `
-                            <button type="button" class="btn-full btn-sm" style="background:#10B981; color:#fff;" onclick="adminReports.approveJurnalItem('${row.id}')"><i class="fas fa-check"></i> Approve</button>
-                            <button type="button" class="btn-full btn-sm" style="background:#EF4444; color:#fff;" onclick="adminReports.rejectJurnalItem('${row.id}')"><i class="fas fa-times"></i> Reject</button>
-                        ` : ''}
                     </div>
                 `;
                 mobileContainer.appendChild(card);
