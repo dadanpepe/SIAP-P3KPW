@@ -312,13 +312,28 @@ const absensi = {
             const s = rawStatus.toLowerCase();
             let badgeClass = '';
             
-            if (s.includes('hadir') || s.includes('tepat waktu') || s.includes('wfh') || s.includes('dinas') || s.includes('wfa')) {
-                badgeClass = 'success';
-            } else if (s.includes('terlambat') || s.includes('pulang awal')) {
-                badgeClass = 'warning';
-            } else if (s.includes('alfa') || s.includes('tanpa absen') || s.includes('mangkir')) {
+            if (s.includes('hadir') || (s.includes('tepat waktu') && !s.includes('terlambat') && !s.includes('tanpa absen'))) {
+                // Hanya hijau jika BENAR-BENAR tepat waktu masuk DAN pulang
+                if (s.includes('masuk tepat waktu') && s.includes('pulang tepat waktu')) {
+                    badgeClass = 'success';
+                } else if (s.includes('tepat waktu')) {
+                    badgeClass = 'success';
+                }
+            }
+            
+            // Override ke merah jika ada indikasi masalah
+            if (s.includes('terlambat') || s.includes('pulang awal') || s.includes('tanpa absen')) {
                 badgeClass = 'danger';
-            } else if (s.includes('izin') || s.includes('sakit') || s.includes('cuti')) {
+            } else if (s.includes('alfa') || s.includes('mangkir')) {
+                badgeClass = 'danger';
+            }
+            
+            // WFH/Dinas/WFA tetap hijau
+            if (s.includes('wfh') || s.includes('dinas') || s.includes('wfa')) {
+                badgeClass = 'success';
+            }
+            
+            if (s.includes('izin') || s.includes('sakit') || s.includes('cuti')) {
                 badgeClass = 'info';
             }
 
@@ -400,7 +415,7 @@ const absensi = {
                 e.preventDefault();
                 this.handleClockIn();
             });
-            console.log('Masuk button initialized, disabled:', btnClockIn.disabled);
+            console.log('Clock In button initialized, disabled:', btnClockIn.disabled);
         }
 
 
@@ -521,16 +536,133 @@ const absensi = {
         }, 100);
     },
 
+    /**
+     * Cek apakah terlalu awal untuk clock-out.
+     * Mengembalikan true jika waktu sekarang BELUM mencapai (shiftEnd - 60 menit).
+     * Artinya tombol pulang baru aktif 1 jam sebelum shift berakhir.
+     */
+    checkTooEarlyForClockOut(shiftName) {
+        if (!shiftName || shiftName === 'Libur') return false;
+
+        const now = new Date();
+        const currentTimeInMinutes = now.getHours() * 60 + now.getMinutes();
+
+        let shiftEndTimeStr = "17:00";
+        const shifts = storage.get('shifts', []);
+        const userShift = shifts.find(s => String(s.name) === String(shiftName));
+
+        if (userShift && userShift.endTime) {
+            shiftEndTimeStr = userShift.endTime.replace('.', ':');
+        }
+
+        const [eH, eM] = shiftEndTimeStr.split(':').map(Number);
+        const shiftEndInMinutes = (eH || 0) * 60 + (eM || 0);
+
+        let shiftStartTimeStr = "08:00";
+        if (userShift && userShift.startTime) {
+            shiftStartTimeStr = userShift.startTime.replace('.', ':');
+        }
+        const [sH, sM] = shiftStartTimeStr.split(':').map(Number);
+        const shiftStartInMinutes = (sH || 0) * 60 + (sM || 0);
+
+        const isCrossMidnight = shiftStartInMinutes > shiftEndInMinutes;
+        // Batas awal clock-out: 1 jam sebelum shift berakhir
+        const earliestClockOut = shiftEndInMinutes - 60;
+
+        if (isCrossMidnight) {
+            // Shift malam, misal 22:00-06:00, earliest = 05:00
+            if (earliestClockOut < 0) {
+                // Shift end 00:30 - 60 = -30 -> 1410 (23:30 hari sebelumnya)
+                const adjustedEarliest = 1440 + earliestClockOut;
+                return currentTimeInMinutes < adjustedEarliest && currentTimeInMinutes > shiftEndInMinutes;
+            }
+            // Normal cross-midnight: earliest masih di hari berikutnya
+            if (currentTimeInMinutes <= shiftEndInMinutes) {
+                // Sudah lewat midnight, cek apakah sudah cukup dekat
+                return currentTimeInMinutes < earliestClockOut;
+            }
+            // Masih sebelum midnight, belum boleh clock-out
+            return currentTimeInMinutes < shiftStartInMinutes;
+        } else {
+            // Shift biasa, misal 07:30-16:00, earliest = 15:00
+            return currentTimeInMinutes < earliestClockOut;
+        }
+    },
+
+    /**
+     * Menghitung berapa menit lagi sampai bisa clock-out
+     */
+    getMinutesUntilClockOut(shiftName) {
+        if (!shiftName || shiftName === 'Libur') return 0;
+
+        const now = new Date();
+        const currentTimeInMinutes = now.getHours() * 60 + now.getMinutes();
+
+        let shiftEndTimeStr = "17:00";
+        const shifts = storage.get('shifts', []);
+        const userShift = shifts.find(s => String(s.name) === String(shiftName));
+
+        if (userShift && userShift.endTime) {
+            shiftEndTimeStr = userShift.endTime.replace('.', ':');
+        }
+
+        const [eH, eM] = shiftEndTimeStr.split(':').map(Number);
+        const shiftEndInMinutes = (eH || 0) * 60 + (eM || 0);
+        const earliestClockOut = shiftEndInMinutes - 60;
+
+        if (currentTimeInMinutes < earliestClockOut) {
+            return earliestClockOut - currentTimeInMinutes;
+        }
+        return 0;
+    },
+
     handleClockOut() {
         if (!this.attendanceData.clockIn || this.attendanceData.clockOut) return;
 
-        // Navigate to face recognition
-        router.navigate('face-recognition');
-        setTimeout(() => {
-            if (window.faceRecognition) {
-                window.faceRecognition.init('clock-out');
-            }
-        }, 100);
+        // Cek apakah terlalu awal untuk clock-out
+        if (this.checkTooEarlyForClockOut(this.attendanceData.shift)) {
+            const minsLeft = this.getMinutesUntilClockOut(this.attendanceData.shift);
+            const hours = Math.floor(minsLeft / 60);
+            const mins = minsLeft % 60;
+            const timeText = hours > 0 ? `${hours} jam ${mins} menit` : `${mins} menit`;
+            
+            modal.show(
+                'Belum Waktunya Pulang',
+                '<div style="text-align: center; padding: 20px;">' +
+                '<i class="fas fa-clock" style="font-size: 48px; color: #F59E0B; margin-bottom: 20px;"></i>' +
+                '<p style="font-size: 16px; line-height: 1.6; color: #333;">' +
+                'Tombol absen pulang baru bisa digunakan <strong>1 jam sebelum</strong> jam pulang shift Anda.' +
+                '<br><br>Sisa waktu: <strong>' + timeText + '</strong> lagi.' +
+                '</p>' +
+                '</div>',
+                [{ label: 'Mengerti', class: 'btn-primary', onClick: () => modal.close() }]
+            );
+            return;
+        }
+
+        // Konfirmasi sebelum clock-out untuk mencegah klik tidak sengaja
+        modal.show(
+            'Konfirmasi Absen Pulang',
+            '<div style="text-align: center; padding: 20px;">' +
+            '<i class="fas fa-sign-out-alt" style="font-size: 48px; color: var(--color-primary); margin-bottom: 20px;"></i>' +
+            '<p style="font-size: 16px; line-height: 1.6; color: #333;">' +
+            'Apakah Anda yakin ingin melakukan <strong>Absen Pulang</strong> sekarang?' +
+            '</p>' +
+            '</div>',
+            [
+                { label: 'Batal', class: 'btn-secondary', onClick: () => modal.close() },
+                { label: 'Ya, Absen Pulang', class: 'btn-primary', onClick: () => {
+                    modal.close();
+                    // Navigate to face recognition
+                    router.navigate('face-recognition');
+                    setTimeout(() => {
+                        if (window.faceRecognition) {
+                            window.faceRecognition.init('clock-out');
+                        }
+                    }, 100);
+                }}
+            ]
+        );
     },
 
     // Process attendance after face recognition verification
@@ -618,7 +750,7 @@ const absensi = {
             // Notify Admin
             const recipientId = 'admin';
             const currentUser = auth.getCurrentUser();
-            const actionLabel = action === 'clock-in' ? 'Masuk' : (action === 'clock-out' ? 'Pulang' : 'Lembur');
+            const actionLabel = action === 'clock-in' ? 'Clock In' : (action === 'clock-out' ? 'Clock Out' : 'Lembur');
             notifications.add(recipientId, currentUser.name, `melakukan ${actionLabel}`, 'info');
         } else {
             // Handle error (e.g. Alfa rejected by server)
@@ -772,7 +904,7 @@ const absensi = {
                     break;
                 case 'waiting':
                     statusRing.classList.add('waiting');
-                    if (statusText) statusText.textContent = 'Siap Masuk';
+                    if (statusText) statusText.textContent = 'Siap Clock In';
                     if (statusSubtext) {
                         statusSubtext.innerHTML = `<span style="font-size:24px;color:var(--text-main);font-weight:700;">${dateTime.getCurrentTime()}</span><br>${dateTime.getCurrentDate()}`;
                     }
@@ -844,7 +976,7 @@ const absensi = {
                 btnClockIn.innerHTML = `
                     <div class="btn-icon"><i class="fas fa-sign-in-alt"></i></div>
                     <div class="btn-text">
-                        <span class="btn-label">Masuk</span>
+                        <span class="btn-label">Clock In</span>
                         <span class="btn-time" id="clock-in-time">--:--</span>
                     </div>
                 `;
@@ -864,10 +996,28 @@ const absensi = {
 
         // Clock Out button
         if (btnClockOut) {
-            btnClockOut.disabled = !this.attendanceData.clockIn || this.attendanceData.clockOut !== null;
-            if (this.attendanceData.clockOut) {
+            const isClockedIn = !!this.attendanceData.clockIn;
+            const isClockedOut = this.attendanceData.clockOut !== null && this.attendanceData.clockOut !== undefined && this.attendanceData.clockOut !== '';
+            const isTooEarlyForOut = isClockedIn && !isClockedOut && this.checkTooEarlyForClockOut(this.attendanceData.shift);
+            
+            btnClockOut.disabled = !isClockedIn || isClockedOut || isTooEarlyForOut;
+            
+            if (isClockedOut) {
                 btnClockOut.classList.add('completed');
                 document.getElementById('clock-out-time').textContent = this.attendanceData.clockOut;
+            } else if (isTooEarlyForOut) {
+                // Tampilkan teks "Belum Waktunya" saat tombol terkunci
+                const minsLeft = this.getMinutesUntilClockOut(this.attendanceData.shift);
+                const hours = Math.floor(minsLeft / 60);
+                const mins = minsLeft % 60;
+                const timeText = hours > 0 ? `${hours}j ${mins}m lagi` : `${mins}m lagi`;
+                btnClockOut.innerHTML = `
+                    <div class="btn-icon"><i class="fas fa-lock"></i></div>
+                    <div class="btn-text">
+                        <span class="btn-label">Belum Waktunya</span>
+                        <span class="btn-time">${timeText}</span>
+                    </div>
+                `;
             }
         }
     },
