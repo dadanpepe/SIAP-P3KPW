@@ -110,6 +110,11 @@
     border: 3px solid var(--text-muted);
 }
 
+.status-ring.has-photo { overflow: hidden; }
+.status-ring .status-photo { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.timeline-verification { display: flex; align-items: center; gap: 8px; margin: 6px 0 0 22px; }
+.verification-thumbnail { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; }
+
 .status-icon {
     width: 80px;
     height: 80px;
