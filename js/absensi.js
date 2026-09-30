@@ -10,11 +10,18 @@ const absensi = {
     systemSettings: {},
 
     initialized: false,
+    syncing: true,
+    saving: false,
+    syncedToday: false,
 
     async init() {
         if (this.initialized) {
-            // Background refresh without showing loader
-            this.loadTodayAttendance().then(() => this.updateUI());
+            this.syncing = true;
+            this.updateUI();
+            await this.loadTodayAttendance();
+            this.syncing = false;
+            this.updateUI();
+            this.renderTimeline();
             // Re-populate location dropdown to check for new permits
             this.populateLocationDropdown();
             return;
@@ -42,6 +49,7 @@ const absensi = {
             ]);
             
             // Final render with fresh data
+            this.syncing = false;
             this.updateUI();
             this.renderTimeline();
             
@@ -49,6 +57,7 @@ const absensi = {
         } catch (error) {
             console.error('Absensi init error:', error);
             if (typeof loader !== 'undefined') loader.hide();
+            this.syncing = false;
             this.updateUI();
         }
     },
@@ -141,6 +150,7 @@ const absensi = {
         const today = dateTime.getLocalDate();
         let currentShift = currentUser?.shift || 'Pagi';
 
+        this.syncedToday = false;
         try {
             // Fetch everything in parallel including profile refresh
             const [result, settingsRes, shiftRes, refreshRes] = await Promise.allSettled([
@@ -177,7 +187,13 @@ const absensi = {
             const freshUser = auth.getCurrentUser();
             currentShift = freshUser?.shift || 'Pagi';
 
-            let todayAttendance = (result.status === 'fulfilled' && result.value.success) ? result.value.data : {};
+            const validResponse = result.status === 'fulfilled' && result.value?.success && result.value.data && (!result.value.data.date || result.value.data.date === today);
+            let todayAttendance = validResponse ? result.value.data : {};
+            if (!validResponse) {
+                this.attendanceData = {};
+                this.currentState = 'waiting';
+                return;
+            }
 
             if (!todayAttendance.date || !todayAttendance.shift) {
                 // Automated shift lookup from admin schedule as override if exists
@@ -269,6 +285,7 @@ const absensi = {
             }
 
             this.attendanceData = todayAttendance;
+            this.syncedToday = true;
             console.log('Loaded attendance for today:', todayAttendance.date, this.attendanceData);
         } catch (error) {
             console.error('Error loading attendance:', error);
@@ -322,14 +339,14 @@ const absensi = {
             }
             
             // Override ke merah jika ada indikasi masalah
-            if (s.includes('terlambat') || s.includes('pulang awal') || s.includes('tanpa absen')) {
+            if (s.includes('terlambat') || s.includes('telat') || s.includes('pulang awal') || s.includes('tanpa absen') || s.includes('tidak absen') || s.includes('tidak valid')) {
                 badgeClass = 'danger';
             } else if (s.includes('alfa') || s.includes('mangkir')) {
                 badgeClass = 'danger';
             }
             
-            // WFH/Dinas/WFA tetap hijau
-            if (s.includes('wfh') || s.includes('dinas') || s.includes('wfa')) {
+            // Masalah absensi tetap merah walaupun lokasi WFH/Dinas/WFA.
+            if (!badgeClass && (s.includes('wfh') || s.includes('dinas') || s.includes('wfa'))) {
                 badgeClass = 'success';
             }
             
@@ -378,6 +395,13 @@ const absensi = {
             if (this.currentState === 'waiting' && statusSubtext) {
                 statusSubtext.innerHTML = `<span style="font-size:24px;color:var(--text-main);font-weight:700;">${time}</span><br>${date}`;
             }
+            if (this.currentState === 'clocked-in' && this.syncedToday && !this.syncing) {
+                const outBtn = document.getElementById('btn-clock-out');
+                const shouldDisable = this.checkTooEarlyForClockOut(this.attendanceData.shift);
+                if (outBtn && !this.saving) outBtn.disabled = shouldDisable;
+                if (shouldDisable) this.updateClockOutLabel();
+                else if (outBtn && outBtn.querySelector('.btn-label')?.textContent === 'Belum Waktunya') this.updateUI();
+            }
         };
 
         updateClock();
@@ -397,7 +421,7 @@ const absensi = {
                 const isAlfa = this.currentState === 'alfa';
                 const isLibur = this.currentState === 'libur';
 
-                btnClockIn.disabled = !isLocationSelected || isClockedIn || isLibur || isAlfa;
+                btnClockIn.disabled = this.syncing || this.saving || !this.syncedToday || !isLocationSelected || isClockedIn || isLibur || isAlfa;
                 
                 if (locationHint) {
                     locationHint.style.display = isLocationSelected ? 'none' : 'block';
@@ -409,10 +433,6 @@ const absensi = {
             btnClockIn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                this.handleClockIn();
-            });
-            btnClockIn.addEventListener('touchend', (e) => {
-                e.preventDefault();
                 this.handleClockIn();
             });
             console.log('Clock In button initialized, disabled:', btnClockIn.disabled);
@@ -442,14 +462,11 @@ const absensi = {
                 e.stopPropagation();
                 this.handleClockOut();
             });
-            btnClockOut.addEventListener('touchend', (e) => {
-                e.preventDefault();
-                this.handleClockOut();
-            });
         }
     },
 
     handleClockIn() {
+        if (this.syncing || this.saving || !this.syncedToday || document.getElementById('btn-clock-in')?.disabled) return;
         if (this.attendanceData.clockIn) return;
         if (this.currentState === 'completed') return;
         if (this.currentState === 'cuti-izin') {
@@ -565,28 +582,9 @@ const absensi = {
         const [sH, sM] = shiftStartTimeStr.split(':').map(Number);
         const shiftStartInMinutes = (sH || 0) * 60 + (sM || 0);
 
-        const isCrossMidnight = shiftStartInMinutes > shiftEndInMinutes;
-        // Batas awal clock-out: 1 jam sebelum shift berakhir
-        const earliestClockOut = shiftEndInMinutes - 60;
-
-        if (isCrossMidnight) {
-            // Shift malam, misal 22:00-06:00, earliest = 05:00
-            if (earliestClockOut < 0) {
-                // Shift end 00:30 - 60 = -30 -> 1410 (23:30 hari sebelumnya)
-                const adjustedEarliest = 1440 + earliestClockOut;
-                return currentTimeInMinutes < adjustedEarliest && currentTimeInMinutes > shiftEndInMinutes;
-            }
-            // Normal cross-midnight: earliest masih di hari berikutnya
-            if (currentTimeInMinutes <= shiftEndInMinutes) {
-                // Sudah lewat midnight, cek apakah sudah cukup dekat
-                return currentTimeInMinutes < earliestClockOut;
-            }
-            // Masih sebelum midnight, belum boleh clock-out
-            return currentTimeInMinutes < shiftStartInMinutes;
-        } else {
-            // Shift biasa, misal 07:30-16:00, earliest = 15:00
-            return currentTimeInMinutes < earliestClockOut;
-        }
+        const duration = (shiftEndInMinutes - shiftStartInMinutes + 1440) % 1440;
+        const elapsed = (currentTimeInMinutes - shiftStartInMinutes + 1440) % 1440;
+        return elapsed < Math.max(0, duration - 60);
     },
 
     /**
@@ -608,16 +606,26 @@ const absensi = {
 
         const [eH, eM] = shiftEndTimeStr.split(':').map(Number);
         const shiftEndInMinutes = (eH || 0) * 60 + (eM || 0);
-        const earliestClockOut = shiftEndInMinutes - 60;
-
-        if (currentTimeInMinutes < earliestClockOut) {
-            return earliestClockOut - currentTimeInMinutes;
-        }
-        return 0;
+        let shiftStartTimeStr = userShift?.startTime?.replace('.', ':') || '08:00';
+        const [sH, sM] = shiftStartTimeStr.split(':').map(Number);
+        const start = (sH || 0) * 60 + (sM || 0);
+        const duration = (shiftEndInMinutes - start + 1440) % 1440;
+        const elapsed = (currentTimeInMinutes - start + 1440) % 1440;
+        return elapsed < Math.max(0, duration - 60) ? duration - 60 - elapsed : 0;
     },
 
-    handleClockOut() {
-        if (!this.attendanceData.clockIn || this.attendanceData.clockOut) return;
+    async handleClockOut() {
+        if (this.syncing || this.saving || !this.syncedToday || document.getElementById('btn-clock-out')?.disabled) return;
+        // Verify the clock-in actually exists on the server before starting face verification.
+        this.syncing = true;
+        this.updateUI();
+        await this.loadTodayAttendance();
+        this.syncing = false;
+        this.updateUI();
+        if (!this.syncedToday || !this.attendanceData.clockIn || this.attendanceData.clockOut) {
+            toast.error('Absen masuk belum tercatat di server. Silakan muat ulang.');
+            return;
+        }
 
         // Cek apakah terlalu awal untuk clock-out
         if (this.checkTooEarlyForClockOut(this.attendanceData.shift)) {
@@ -653,6 +661,7 @@ const absensi = {
                 { label: 'Batal', class: 'btn-secondary', onClick: () => modal.close() },
                 { label: 'Ya, Absen Pulang', class: 'btn-primary', onClick: () => {
                     modal.close();
+                    if (this.syncing || this.saving || !this.syncedToday || !this.attendanceData.clockIn) return;
                     // Navigate to face recognition
                     router.navigate('face-recognition');
                     setTimeout(() => {
@@ -667,6 +676,19 @@ const absensi = {
 
     // Process attendance after face recognition verification
     async processWithVerification(action, verificationData) {
+        if (this.saving) return;
+        this.saving = true;
+        this.syncing = true;
+        this.updateUI();
+        // A fresh read avoids using a stale or unconfirmed clock-in.
+        await this.loadTodayAttendance();
+        if (!this.syncedToday || (action === 'clock-out' && (!this.attendanceData.clockIn || this.attendanceData.clockOut))) {
+            this.saving = false;
+            this.syncing = false;
+            this.updateUI();
+            toast.error('Absen masuk belum tercatat di server. Silakan coba lagi.');
+            return;
+        }
         const timeStr = dateTime.formatTime(new Date());
 
         // Pre-save Check: Always check Alfa before allowing process
@@ -682,6 +704,9 @@ const absensi = {
                 [{ label: 'Mengerti', class: 'btn-primary', onClick: () => modal.close() }]
             );
             router.navigate('absensi');
+            this.saving = false;
+            this.syncing = false;
+            this.updateUI();
             return;
         }
 
@@ -719,7 +744,7 @@ const absensi = {
             this.attendanceData.verification = this.attendanceData.verificationOut;
         }
 
-        const result = await this.saveAttendance();
+        const result = await this.saveAttendance(action);
         if (result && result.success) {
             // After server save, the verification photo might be replaced with a Drive URL.
             // Preserve the original base64 photo for local UI display
@@ -751,7 +776,8 @@ const absensi = {
             const recipientId = 'admin';
             const currentUser = auth.getCurrentUser();
             const actionLabel = action === 'clock-in' ? 'Clock In' : (action === 'clock-out' ? 'Clock Out' : 'Lembur');
-            notifications.add(recipientId, currentUser.name, `melakukan ${actionLabel}`, 'info');
+            try { notifications.add(recipientId, currentUser.name, `melakukan ${actionLabel}`, 'info'); }
+            catch (e) { console.warn('Gagal mengirim notifikasi absensi:', e); }
         } else {
             // Handle error (e.g. Alfa rejected by server)
             const errorMsg = (result && result.error) ? result.error : 'Gagal menyimpan absensi';
@@ -762,16 +788,21 @@ const absensi = {
             this.updateUI();
         }
 
-        // Clean up temp data
+        // Clean up temp data; restore server truth after every attempt.
         storage.remove('temp_attendance');
+        await this.loadTodayAttendance();
+        this.saving = false;
+        this.syncing = false;
+        this.updateUI();
+        this.renderTimeline();
     },
 
-    async saveAttendance() {
+    async saveAttendance(action) {
         const currentUser = auth.getCurrentUser();
-        this.attendanceData.userId = currentUser?.id || 'demo-user';
+        const payload = { ...this.attendanceData, userId: currentUser?.id, attendanceAction: action };
 
         try {
-            const result = await api.saveAttendance(this.attendanceData);
+            const result = await api.saveAttendance(payload);
             if (result && result.success && result.data) {
                 // Keep the frontend in sync with server-calculated data (especially 'status')
                 this.attendanceData = result.data;
@@ -885,6 +916,8 @@ const absensi = {
 
         if (statusRing) {
             statusRing.className = 'status-ring';
+            statusRing.style.borderColor = '';
+            statusRing.innerHTML = '<div class="status-icon"><i class="fas fa-clock"></i></div>'; 
 
             switch (this.currentState) {
                 case 'cuti-izin':
@@ -915,20 +948,29 @@ const absensi = {
                     if (statusSubtext) statusSubtext.textContent = 'Semangat bekerja!';
                     
                     // Show verification photo if available
-                    if (this.attendanceData.verification && this.attendanceData.verification.photo) {
+                    const verIn = this.attendanceData.verificationIn || this.attendanceData.verification;
+                    if (verIn?.photo) {
                         statusRing.classList.add('has-photo');
-                        statusRing.innerHTML = `<img src="${this.attendanceData.verification.photo}" class="status-photo" alt="Me">`;
-                        
-                        if (statusSubtext && this.attendanceData.verification.location) {
-                            const loc = this.attendanceData.verification.location;
-                            statusSubtext.innerHTML = `Semangat bekerja!<br><span style="font-size:11px;color:var(--color-primary)">📍 Terverifikasi di (${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)})</span>`;
-                        }
+                        const img = document.createElement('img');
+                        img.src = verIn.photo;
+                        img.className = 'status-photo';
+                        img.alt = 'Foto absen masuk';
+                        statusRing.replaceChildren(img);
                     }
                     break;
                 case 'completed':
                     statusRing.classList.add('completed');
                     if (statusText) statusText.textContent = 'Selesai Bekerja';
                     if (statusSubtext) statusSubtext.textContent = 'Terima kasih atas kerja kerasnya!';
+                    const completedPhoto = this.attendanceData.verificationOut?.photo || this.attendanceData.verificationIn?.photo;
+                    if (completedPhoto) {
+                        statusRing.classList.add('has-photo');
+                        const img = document.createElement('img');
+                        img.src = completedPhoto;
+                        img.className = 'status-photo';
+                        img.alt = 'Foto absensi';
+                        statusRing.replaceChildren(img);
+                    }
                     break;
                 case 'alfa':
                     statusRing.classList.add('waiting');
@@ -955,7 +997,8 @@ const absensi = {
             const isCutiIzin = this.currentState === 'cuti-izin';
             const isTooEarly = this.checkTooEarlyStatus(this.attendanceData.shift);
 
-            btnClockIn.disabled = isClockedIn || isLibur || isAlfa || isTooEarly || isCompleted || isCutiIzin;
+            const locationSelected = !!document.getElementById('absensi-select-location')?.value;
+            btnClockIn.disabled = this.syncing || this.saving || !this.syncedToday || !locationSelected || isClockedIn || isLibur || isAlfa || isTooEarly || isCompleted || isCutiIzin;
 
             if (isClockedIn || isCompleted) {
                 btnClockIn.classList.add('completed');
@@ -1000,26 +1043,27 @@ const absensi = {
             const isClockedOut = this.attendanceData.clockOut !== null && this.attendanceData.clockOut !== undefined && this.attendanceData.clockOut !== '';
             const isTooEarlyForOut = isClockedIn && !isClockedOut && this.checkTooEarlyForClockOut(this.attendanceData.shift);
             
-            btnClockOut.disabled = !isClockedIn || isClockedOut || isTooEarlyForOut;
+            btnClockOut.disabled = this.syncing || this.saving || !this.syncedToday || !isClockedIn || isClockedOut || isTooEarlyForOut;
             
+            btnClockOut.classList.toggle('completed', isClockedOut);
             if (isClockedOut) {
-                btnClockOut.classList.add('completed');
-                document.getElementById('clock-out-time').textContent = this.attendanceData.clockOut;
+                btnClockOut.querySelector('.btn-label').textContent = 'Clock Out';
+                btnClockOut.querySelector('.btn-time').textContent = this.attendanceData.clockOut;
             } else if (isTooEarlyForOut) {
-                // Tampilkan teks "Belum Waktunya" saat tombol terkunci
-                const minsLeft = this.getMinutesUntilClockOut(this.attendanceData.shift);
-                const hours = Math.floor(minsLeft / 60);
-                const mins = minsLeft % 60;
-                const timeText = hours > 0 ? `${hours}j ${mins}m lagi` : `${mins}m lagi`;
-                btnClockOut.innerHTML = `
-                    <div class="btn-icon"><i class="fas fa-lock"></i></div>
-                    <div class="btn-text">
-                        <span class="btn-label">Belum Waktunya</span>
-                        <span class="btn-time">${timeText}</span>
-                    </div>
-                `;
+                this.updateClockOutLabel();
+            } else {
+                btnClockOut.querySelector('.btn-label').textContent = 'Clock Out';
+                btnClockOut.querySelector('.btn-time').textContent = '--:--';
             }
         }
+    },
+
+    updateClockOutLabel() {
+        const btn = document.getElementById('btn-clock-out');
+        if (!btn) return;
+        const mins = this.getMinutesUntilClockOut(this.attendanceData.shift);
+        btn.querySelector('.btn-label').textContent = 'Belum Waktunya';
+        btn.querySelector('.btn-time').textContent = `${Math.floor(mins / 60)}j ${mins % 60}m lagi`;
     },
 
     renderTimeline() {
@@ -1033,6 +1077,8 @@ const absensi = {
             const timeEl = item.querySelector('.timeline-time');
 
             item.className = 'timeline-item pending';
+            if (timeEl) timeEl.textContent = '--:--';
+            item.querySelector('.timeline-verification')?.remove();
 
             switch (type) {
                 case 'clock-in':
