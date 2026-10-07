@@ -51,6 +51,10 @@ window.syncData = async function() {
         loader.show('Sinkronisasi database terbaru...');
     }
 
+    if (typeof api !== 'undefined') api.clearReadCache();
+    if (window.absensi) window.absensi._photoLoads.clear();
+    await auth.refreshProfile();
+
     // Clear ONLY data cache keys, preserve session and branding
     if (typeof storage !== 'undefined') {
         const keysToPreserve = ['session', 'branding_version_v1', 'notifications'];
@@ -71,9 +75,8 @@ window.syncData = async function() {
 
     // Reset all modules to non-initialized state
     modules.forEach(m => {
-        if (window[m]) {
-            window[m].initialized = false;
-        }
+        const module = window[m] || (m === 'dashboard' ? dashboard : null);
+        if (module) module.initialized = false;
     });
 
     // Re-trigger the current page's initialization
@@ -82,7 +85,7 @@ window.syncData = async function() {
     }
 
     if (typeof toast !== 'undefined') {
-        toast.success('Sinkronisasi database berhasil.');
+        toast.info('Memuat ulang data dari server...');
     }
 
     if (typeof loader !== 'undefined') {
@@ -423,29 +426,20 @@ var dateTime = {
         return !isNaN(d.getTime());
     },
 
+    parseTimeMinutes: function(value) {
+        if (value === null || value === undefined || value === '') return NaN;
+        const match = String(value).trim().match(/^(\d{1,2})(?:([:.])(\d{1,2}))?(?::\d{2})?$/);
+        if (!match) return NaN;
+        const hour = Number(match[1]);
+        const minute = match[3] ? Number(match[2] === '.' ? match[3].padEnd(2, '0') : match[3]) : 0;
+        return hour <= 23 && minute <= 59 ? hour * 60 + minute : NaN;
+    },
+
     calculateDuration: function(start, end) {
-        if (!start || !end) return '-';
-        
-        // Normalize time format (replace . with :)
-        const s = start.toString().replace('.', ':');
-        const e = end.toString().replace('.', ':');
-        
-        var startTime = new Date('2000-01-01 ' + s);
-        var endTime = new Date('2000-01-01 ' + e);
-        var diff = endTime - startTime;
-
-        // Handle night shifts (e.g., 23:00 to 08:00)
-        if (diff < 0) {
-            endTime = new Date('2000-01-02 ' + end);
-            diff = endTime - startTime;
-        }
-
-        if (isNaN(diff)) return '-';
-
-        var hours = Math.floor(diff / 3600000);
-        var minutes = Math.floor((diff % 3600000) / 60000);
-
-        return hours + 'j ' + minutes + 'm';
+        const a = this.parseTimeMinutes(start), b = this.parseTimeMinutes(end);
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return '-';
+        const diff = (b - a + 1440) % 1440;
+        return Math.floor(diff / 60) + 'j ' + (diff % 60) + 'm';
     },
 
     calculateWorkingDays: function(startDate, endDate) {
