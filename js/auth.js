@@ -140,6 +140,7 @@ const auth = {
             }
             // --- ROLE ENFORCEMENT END ---
 
+            this.resetEmployeeData();
             this.currentUser = user;
             storage.set('session', user);
 
@@ -196,6 +197,7 @@ const auth = {
             }
         }
         
+        this.resetEmployeeData();
         this.currentUser = null;
         storage.remove('session');
         storage.remove('currentPage');
@@ -292,7 +294,7 @@ const auth = {
         if (user.role === 'pegawai' || user.role !== 'admin') {
             // Fetch profile from backend
             try {
-                const result = await api.getEmployeeProfile(user.id);
+                const result = await api.getEmployeeProfile(user.id, user.email, user.role);
                 if (result.success && result.data) {
                     const profile = result.data;
                     document.getElementById('profile-department').textContent = profile.department || '-';
@@ -374,6 +376,27 @@ const auth = {
         return this.currentUser && this.currentUser.role === 'admin';
     },
 
+    resetEmployeeData() {
+        api.clearReadCache();
+        ['attendance', 'jurnals', 'leaves', 'izin', 'temp_attendance', 'admin_employees'].forEach(key => storage.remove(key));
+        if (window.absensi) {
+            window.absensi.initialized = false;
+            window.absensi.attendanceData = {};
+            window.absensi.currentState = 'waiting';
+            window.absensi.syncedToday = false;
+            window.absensi.syncing = true;
+            window.absensi._photoLoads.clear();
+        }
+        if (window.dashboard) {
+            window.dashboard.initialized = false;
+            window.dashboard.attendanceData = [];
+        }
+        if (window.cuti) { window.cuti.initialized = false; window.cuti.leaves = []; }
+        if (window.izin) { window.izin.initialized = false; window.izin.izinData = []; }
+        if (window.jurnal) window.jurnal.jurnals = [];
+        if (window.faceRecognition) window.faceRecognition.cleanup();
+    },
+
     getCurrentUser() {
         return this.currentUser;
     },
@@ -381,12 +404,15 @@ const auth = {
     async refreshProfile() {
         if (!this.currentUser || !this.currentUser.id || !API_BASE_URL) return;
         
+        const sessionUser = this.currentUser;
         try {
-            const result = await api.getEmployeeProfile(this.currentUser.id);
+            const result = await api.getEmployeeProfile(this.currentUser.id, this.currentUser.email, this.currentUser.role);
+            if (this.currentUser !== sessionUser) return this.currentUser;
             if (result.success && result.data) {
                 // Merge new data into current user object
                 const updatedUser = {
                     ...this.currentUser,
+                    id: result.data.id,
                     name: result.data.name,
                     email: result.data.email,
                     department: result.data.department || '',
@@ -407,7 +433,7 @@ const auth = {
         } catch (error) {
             console.error('Failed to refresh profile:', error);
         }
-        return this.currentUser;
+        return null;
     }
 };
 
