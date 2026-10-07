@@ -52,22 +52,28 @@ const dashboard = {
 
     async loadData() {
         try {
+            const freshProfile = await auth.refreshProfile();
+            if (!freshProfile && API_BASE_URL) return;
             const currentUser = auth.getCurrentUser();
             if (currentUser && currentUser.id) {
                 // Run multiple requests in parallel
-                const [attResult, settingsRes, teamRes, profileRes] = await Promise.allSettled([
+                const [attResult, settingsRes, teamRes, profileRes, shiftsRes] = await Promise.allSettled([
                     api.getAttendance(currentUser.id),
                     api.getSettings(),
-                    api.getEmployees(), // For team presence
-                    auth.refreshProfile() // Ensure session is fresh
+                    api.getTeamPresence(), // Lightweight team data
+                    Promise.resolve(freshProfile),
+                    api.getShifts()
                 ]);
 
+                if (auth.getCurrentUser()?.email !== currentUser.email) return;
                 // Immediately update Welcome card if profile was refreshed 
                 // (This ensures shift changes from DB are shown ASAP)
                 if (profileRes.status === 'fulfilled') {
                     console.log('Profile refreshed, updating welcome card specifically.');
                     this.updateWelcomeCard();
                 }
+
+                if (shiftsRes.status === 'fulfilled' && shiftsRes.value.success) storage.set('shifts', shiftsRes.value.data);
 
                 // 1. Process Attendance
                 if (attResult.status === 'fulfilled' && attResult.value.success) {
@@ -294,28 +300,20 @@ const dashboard = {
             let defaultShiftName = currentUser?.shift || 'Pagi';
 
             monthAttendance.forEach(att => {
-                if (!att.clockIn) return;
-
-                // Determine the shift for this record
-                const shiftName = att.shift || defaultShiftName;
-                const shift = shifts.find(s => String(s.name) === String(shiftName));
-                
-                let shiftStartMin = 8 * 60; // default 08:00
-                if (shift && shift.startTime) {
-                    const [sH, sM] = String(shift.startTime).replace('.', ':').split(':').map(Number);
-                    shiftStartMin = (sH || 0) * 60 + (sM || 0);
+                if (att.lateMinutes !== null && att.lateMinutes !== undefined && att.lateMinutes !== '') {
+                    totalLateMinutes += Math.max(0, Number(att.lateMinutes) || 0);
+                    return;
                 }
-
-                // Parse clock-in time
-                const safeClockIn = String(att.clockIn).replace('.', ':');
-                const [inH, inM] = safeClockIn.split(':').map(Number);
-                const clockInMin = (inH || 0) * 60 + (inM || 0);
-
-                // Calculate lateness (no tolerance - show raw lateness)
-                const lateBy = clockInMin - shiftStartMin;
-                if (lateBy > 0) {
-                    totalLateMinutes += lateBy;
-                }
+                const storedLate = String(att.status || '').match(/(?:terlambat|telat)\s+(\d+)/i);
+                if (storedLate) { totalLateMinutes += Number(storedLate[1]); return; }
+                const shift = shifts.find(s => String(s.name) === String(att.shift || defaultShiftName));
+                const start = dateTime.parseTimeMinutes(att.shiftStartTime || shift?.startTime);
+                const end = dateTime.parseTimeMinutes(att.shiftEndTime || shift?.endTime);
+                const clock = dateTime.parseTimeMinutes(att.clockIn);
+                if (![start, end, clock].every(Number.isFinite)) return;
+                const lateBy = start > end && clock <= end ? clock + 1440 - start : clock - start;
+                const tolerance = att.lateTolerance !== undefined && att.lateTolerance !== '' ? Number(att.lateTolerance) : 15;
+                if (lateBy > tolerance) totalLateMinutes += lateBy;
             });
 
             if (totalLateMinutes > 0) {
@@ -456,6 +454,7 @@ const dashboard = {
 };
 
 // Global init function called by router
+window.dashboard = dashboard;
 window.initDashboard = async () => {
     await dashboard.init();
 };
