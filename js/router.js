@@ -48,6 +48,9 @@ const router = {
     },
     
     showPage(page, pushState = true) {
+        if (this.currentPage === 'face-recognition' && page !== 'face-recognition' && window.faceRecognition) {
+            window.faceRecognition.cleanup();
+        }
         // Map page to its module object for initialization check
         const pageModules = {
             'dashboard': window.dashboard,
