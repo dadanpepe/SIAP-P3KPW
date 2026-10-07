@@ -1,0 +1,19 @@
+{
+  "backend/Attendance.gs": "c6946a0905c6e131968dfd98a6a79c3a5967b9908dc27a396f39df6587492d1f",
+  "backend/AttendanceSupport.gs": "864a17dc1138884c8747d2f6d37b5faad8e8004a0fe1715facc6c814715e91bc",
+  "backend/Auth.gs": "82f1417332d97f6cf1d39c3b173db089f43cbd478b723989cbf06a528d5cd17c",
+  "backend/Code.gs": "4030e5b196fc5710b1a44b43d3b9fa1011769cce998187084429b8a589dd7193",
+  "backend/Database.gs": "d14b927d1ebb27aaa5be48e8e3095d84d21c2b5c594e8e6b697475a6622a6d17",
+  "backend/Employee.gs": "4b5adc82c70aaf3471716ece1a3add7f66116372f89eb3fea88d0d1b664fa04a",
+  "backend/Migration.gs": "fffe47f38c466dda1cb59dfd448f352f8317e66cd7240dcedd367e8f0bf2e152",
+  "backend/Permission.gs": "d509621869d912b7bb4407a850fe734fd6b53cffecf7deeec3f35eecdc877942",
+  "backend/Settings.gs": "7d4eae00a3df42df4abfb716e7bcb651a492d787841a3c13fee66b6b5dcdd07c",
+  "index.html": "e95d63811cafe5dfed27b2fafe7c0d09fc13c6bd0a642ef9c30b364dbf3ea1ab",
+  "js/absensi.js": "39d4b478c9a61d41eb1e44c54c3d939501369c4e2e5e4729e48b2f47ebb62b01",
+  "js/api.js": "2f8e80d390e5e586e31001273bca78fa2db57c8eb4f911213a03c95f10f7d26a",
+  "js/auth.js": "18863377fba6d312b8e95b816d3a8cc712b85de3d97082b4408cc7f48a155182",
+  "js/dashboard.js": "f2beaef0bf137b4751620e8babb299494320e10397b6d31986a76659f7bd5512",
+  "js/face-api-logic.js": "3debc069959b573d47b6b4ff1a917bf25bd9125ff01a855c840d0abfecf817cb",
+  "js/main.js": "eb286de8b1d14bb56f409065a10bb0ae9ede9676fc35347137ab2aa140538a2b",
+  "js/router.js": "e5aa8a71b65856099613f8d0874941454917cb030d02a46ada91c56ed29d91cc"
+}
