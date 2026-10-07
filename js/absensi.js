@@ -15,10 +15,21 @@ const absensi = {
     syncedToday: false,
 
     async init() {
+        this.syncing = true;
+        this.updateUI();
+        const freshProfile = await auth.refreshProfile();
+        if (!freshProfile && API_BASE_URL) {
+            this.currentState = 'sync-error';
+            this.syncedToday = false;
+            this.syncing = false;
+            this.updateUI();
+            if (typeof loader !== 'undefined') loader.hide();
+            return;
+        }
         if (this.initialized) {
             this.syncing = true;
             this.updateUI();
-            await this.loadTodayAttendance();
+            await Promise.all([this.loadTodayAttendance(), this.loadAttendanceHistory()]);
             this.syncing = false;
             this.updateUI();
             this.renderTimeline();
@@ -131,6 +142,11 @@ const absensi = {
         });
 
         selectEl.innerHTML = html;
+        const locationHint = document.getElementById('location-hint');
+        if (locationHint && !hasRemotePermit && !hasAssignedLocation) {
+            locationHint.textContent = 'Lokasi kerja akun belum cocok dengan kantor terdaftar. Minta admin memeriksa lokasiKerja di data pegawai.';
+            locationHint.style.display = 'block';
+        }
 
         // 3. Auto-select logic
         const firstActiveValue = Array.from(selectEl.options).find(opt => opt.value && !opt.disabled)?.value;
@@ -157,7 +173,7 @@ const absensi = {
                 api.getTodayAttendance(userId),
                 api.getSettings(),
                 api.getShifts(),
-                auth.refreshProfile() // Now runs in parallel
+                Promise.resolve(auth.getCurrentUser())
             ]);
 
             // Sync fresh shifts to local storage
@@ -188,10 +204,11 @@ const absensi = {
             currentShift = freshUser?.shift || 'Pagi';
 
             const validResponse = result.status === 'fulfilled' && result.value?.success && result.value.data && (!result.value.data.date || result.value.data.date === today);
+            if (auth.getCurrentUser()?.email !== currentUser?.email) return;
             let todayAttendance = validResponse ? result.value.data : {};
             if (!validResponse) {
                 this.attendanceData = {};
-                this.currentState = 'waiting';
+                this.currentState = 'sync-error';
                 return;
             }
 
@@ -262,6 +279,8 @@ const absensi = {
                 };
             }
 
+            if (!todayAttendance.verificationIn && todayAttendance.verification?.photo) todayAttendance.verificationIn = todayAttendance.verification;
+
             // Determine current state
             const isAlfaTime = this.checkAlfaStatus(todayAttendance.shift);
             const serverStatus = (todayAttendance.status || '').toLowerCase();
@@ -293,16 +312,17 @@ const absensi = {
     },
 
     async loadAttendanceHistory() {
+        const user = auth.getCurrentUser();
+        if (!user) return;
         try {
-            const result = await api.getAllAttendance();
-            const allData = result.data || [];
-
-            // Filter by current user
-            const currentUser = auth.getCurrentUser();
-            const userId = currentUser?.id || 'demo-user';
-            const historyData = allData.filter(d => String(d.userId) === String(userId));
-
-            this.renderHistory(historyData);
+            const result = await api.getAttendance(user.id);
+            if (auth.getCurrentUser()?.email !== user.email) return;
+            if (!result.success) {
+                const tbody = document.getElementById('attendance-history');
+                if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center">Gagal memuat riwayat. Periksa koneksi lalu sinkronkan ulang.</td></tr>';
+                return;
+            }
+            this.renderHistory(result.data || []);
         } catch (error) {
             console.error('Error loading history:', error);
         }
@@ -712,6 +732,7 @@ const absensi = {
 
         // Save local copy of photo for immediate UI preview (before server roundtrip)
         const localPhotoBase64 = verificationData.photo || null;
+        if (action === 'clock-in') this.attendanceData.locationName = verificationData.locationName || '';
 
         switch (action) {
             case 'clock-in':
@@ -799,7 +820,13 @@ const absensi = {
 
     async saveAttendance(action) {
         const currentUser = auth.getCurrentUser();
-        const payload = { ...this.attendanceData, userId: currentUser?.id, attendanceAction: action };
+        // Send only this action's verification; never re-upload the stored clock-in photo on clock-out.
+        const payload = {
+            userId: currentUser?.id, date: this.attendanceData.date, shift: this.attendanceData.shift,
+            attendanceAction: action, locationName: this.attendanceData.locationName,
+            overtimeStart: this.attendanceData.overtimeStart,
+            verification: action === 'clock-in' ? this.attendanceData.verificationIn : this.attendanceData.verificationOut
+        };
 
         try {
             const result = await api.saveAttendance(payload);
@@ -935,6 +962,11 @@ const absensi = {
                     if (statusText) statusText.textContent = 'Hari Libur';
                     if (statusSubtext) statusSubtext.textContent = 'Anda tidak memiliki jadwal kerja hari ini.';
                     break;
+                case 'sync-error':
+                    statusRing.classList.add('waiting');
+                    if (statusText) statusText.textContent = 'Gagal Memuat Absensi';
+                    if (statusSubtext) statusSubtext.textContent = 'Periksa koneksi lalu tekan sinkronisasi untuk mencoba kembali.';
+                    break;
                 case 'waiting':
                     statusRing.classList.add('waiting');
                     if (statusText) statusText.textContent = 'Siap Clock In';
@@ -952,7 +984,10 @@ const absensi = {
                     if (verIn?.photo) {
                         statusRing.classList.add('has-photo');
                         const img = document.createElement('img');
-                        img.src = verIn.photo;
+                        this.setAttendancePhoto(img, verIn.photo, 'clock-in', () => {
+                            statusRing.classList.remove('has-photo');
+                            statusRing.innerHTML = '<div class="status-icon"><i class="fas fa-briefcase"></i></div>';
+                        });
                         img.className = 'status-photo';
                         img.alt = 'Foto absen masuk';
                         statusRing.replaceChildren(img);
@@ -966,7 +1001,10 @@ const absensi = {
                     if (completedPhoto) {
                         statusRing.classList.add('has-photo');
                         const img = document.createElement('img');
-                        img.src = completedPhoto;
+                        this.setAttendancePhoto(img, completedPhoto, this.attendanceData.verificationOut?.photo ? 'clock-out' : 'clock-in', () => {
+                            statusRing.classList.remove('has-photo');
+                            statusRing.innerHTML = '<div class="status-icon"><i class="fas fa-check"></i></div>';
+                        });
                         img.className = 'status-photo';
                         img.alt = 'Foto absensi';
                         statusRing.replaceChildren(img);
@@ -1091,7 +1129,7 @@ const absensi = {
                         const ver = this.attendanceData.verificationIn;
                         if (ver && ver.photo) {
                             let html = `<div class="timeline-verification">`;
-                            html += `<img src="${ver.photo}" class="verification-thumbnail">`;
+                            html += `<span class="verification-photo-slot"></span>`;
                             html += `<div class="verification-info">
                                 <span class="verification-loc"><i class="fas fa-map-marker-alt"></i> ${ver.location ? (typeof ver.location.latitude === 'number' ? ver.location.latitude.toFixed(4) : ver.location.latitude) + ', ' + (typeof ver.location.longitude === 'number' ? ver.location.longitude.toFixed(4) : ver.location.longitude) : 'Lokasi tidak ada'}</span>
                                 <span style="font-size:10px; color:#94a3b8">Verifikasi AI Berhasil</span>
@@ -1100,6 +1138,14 @@ const absensi = {
                             // Only add if not already present
                             if (!item.querySelector('.timeline-verification')) {
                                 item.querySelector('.timeline-content').insertAdjacentHTML('afterend', html);
+                                const img = document.createElement('img');
+                                img.className = 'verification-thumbnail';
+                                img.alt = type === 'clock-in' ? 'Selfie masuk' : 'Selfie pulang';
+                                this.setAttendancePhoto(img, ver.photo, type, () => {
+                                    const slot = img.parentNode;
+                                    if (slot) slot.textContent = 'Foto tidak tersedia';
+                                });
+                                item.querySelector('.verification-photo-slot').appendChild(img);
                             }
                         }
                     }
@@ -1115,7 +1161,7 @@ const absensi = {
                         const ver = this.attendanceData.verificationOut;
                         if (ver && ver.photo) {
                             let html = `<div class="timeline-verification">`;
-                            html += `<img src="${ver.photo}" class="verification-thumbnail">`;
+                            html += `<span class="verification-photo-slot"></span>`;
                             html += `<div class="verification-info">
                                 <span class="verification-loc"><i class="fas fa-map-marker-alt"></i> ${ver.location ? (typeof ver.location.latitude === 'number' ? ver.location.latitude.toFixed(4) : ver.location.latitude) + ', ' + (typeof ver.location.longitude === 'number' ? ver.location.longitude.toFixed(4) : ver.location.longitude) : 'Lokasi tidak ada'}</span>
                                 <span style="font-size:10px; color:#94a3b8">Verifikasi AI Berhasil</span>
@@ -1124,6 +1170,14 @@ const absensi = {
                             // Only add if not already present
                             if (!item.querySelector('.timeline-verification')) {
                                 item.querySelector('.timeline-content').insertAdjacentHTML('afterend', html);
+                                const img = document.createElement('img');
+                                img.className = 'verification-thumbnail';
+                                img.alt = type === 'clock-in' ? 'Selfie masuk' : 'Selfie pulang';
+                                this.setAttendancePhoto(img, ver.photo, type, () => {
+                                    const slot = img.parentNode;
+                                    if (slot) slot.textContent = 'Foto tidak tersedia';
+                                });
+                                item.querySelector('.verification-photo-slot').appendChild(img);
                             }
                         }
                     }
@@ -1141,6 +1195,43 @@ const absensi = {
         }
     },
     
+    _photoLoads: new Map(),
+
+    setAttendancePhoto(img, source, action, unavailable) {
+        const userId = auth.getCurrentUser()?.id;
+        const recordId = this.attendanceData.id;
+        const key = [userId, recordId, action, source].join('|');
+        let attempted = false;
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            if (!img.isConnected || !img.src.startsWith('data:image/')) return;
+            try {
+                const sample = document.createElement('canvas');
+                sample.width = 16; sample.height = 16;
+                const context = sample.getContext('2d', { willReadFrequently: true });
+                context.drawImage(img, 0, 0, 16, 16);
+                const pixels = context.getImageData(0, 0, 16, 16).data;
+                let brightness = 0;
+                for (let i = 0; i < pixels.length; i += 4) brightness += Math.max(pixels[i], pixels[i + 1], pixels[i + 2]);
+                if (brightness / 256 < 2) unavailable();
+            } catch (error) { console.warn('Photo preview could not be inspected:', error.name); }
+        };
+        img.onerror = async () => {
+            if (!img.isConnected) return;
+            if (attempted) { unavailable(); return; }
+            attempted = true;
+            if (!recordId || !userId) { unavailable(); return; }
+            if (!this._photoLoads.has(key)) {
+                this._photoLoads.set(key, api.getAttendancePhoto(userId, recordId, action));
+            }
+            const result = await this._photoLoads.get(key);
+            if (!img.isConnected || String(auth.getCurrentUser()?.id) !== String(userId) || String(this.attendanceData.id) !== String(recordId)) return;
+            if (result.success && /^data:image\//.test(result.data)) img.src = result.data;
+            else { this._photoLoads.delete(key); unavailable(); }
+        };
+        img.src = typeof normalizeImageUrl === 'function' ? normalizeImageUrl(source) : source;
+    },
+
     getSelectedLocation: function() {
         const selectEl = document.getElementById('absensi-select-location');
         if (!selectEl) return null;
