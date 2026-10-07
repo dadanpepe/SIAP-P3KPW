@@ -16,10 +16,14 @@ const faceRecognition = {
     isRegistering: false,
     labeledDescriptors: null,
     matchThreshold: 0.5, // 50% accuracy
+    capturing: false,
+    cameraGeneration: 0,
     capturedPhotoBase64: null, // Store captured photo string
 
     async init(action) {
         console.log('Face Recognition UI initialized with action:', action);
+        this.stopCamera();
+        this.capturing = false;
         this.currentAction = action;
         this.photoCaptured = false;
         this.capturedPhotoBase64 = null; 
@@ -43,7 +47,7 @@ const faceRecognition = {
         const confirmBtn = document.getElementById('btn-confirm-attendance');
         const registerContainer = document.getElementById('registration-save-container');
 
-        if (captureBtn) captureBtn.style.display = 'flex';
+        if (captureBtn) { captureBtn.style.display = 'flex'; captureBtn.disabled = true; }
         if (retakeBtn) retakeBtn.style.display = 'none';
         if (confirmBtn) confirmBtn.style.display = 'none';
         if (registerContainer) registerContainer.remove();
@@ -69,6 +73,18 @@ const faceRecognition = {
 
     async loadModels() {
         if (this.modelsLoaded) return;
+        if (!window.faceapi) {
+            if (!this._libraryLoad) {
+                this._libraryLoad = new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js';
+                    script.onload = resolve;
+                    script.onerror = () => reject(new Error('Gagal memuat library verifikasi wajah'));
+                    document.head.appendChild(script);
+                }).catch(error => { this._libraryLoad = null; throw error; });
+            }
+            await this._libraryLoad;
+        }
         
         console.log('Loading AI models from CDN...');
         const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
@@ -120,7 +136,7 @@ const faceRecognition = {
             }
         } else {
             if (registerBtn) registerBtn.style.display = 'none';
-            if (captureBtn) captureBtn.style.display = 'flex';
+            if (captureBtn) { captureBtn.style.display = 'flex'; captureBtn.disabled = true; }
             if (locationSec) locationSec.style.display = 'block';
             if (confirmBtn) {
                 confirmBtn.innerHTML = '<i class="fas fa-check-circle"></i> Konfirmasi Absensi';
@@ -143,20 +159,48 @@ const faceRecognition = {
             this.video.srcObject = this.stream;
             
             // Explicitly call play for mobile browsers
-            await this.video.play().catch(e => console.warn('Video play blocked:', e));
+            await this.video.play();
+            await this.waitForCameraFrame(this.video);
         } catch (error) {
             console.error('Camera error:', error);
             toast.error('Gagal mengakses kamera.');
         }
     },
 
+    async waitForCameraFrame(video) {
+        if (!video || !this.stream) throw new Error('Kamera belum aktif.');
+        await new Promise((resolve, reject) => {
+            let frameId, pollId, settled = false;
+            const timeout = setTimeout(() => finish(new Error('Frame kamera belum siap. Coba foto ulang.')), 8000);
+            const finish = error => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                clearTimeout(pollId);
+                if (frameId !== undefined && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(frameId);
+                error ? reject(error) : resolve();
+            };
+            const ready = () => video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+            if (video.requestVideoFrameCallback) {
+                frameId = video.requestVideoFrameCallback(() => ready() ? finish() : finish(new Error('Frame kamera tidak tersedia.')));
+            } else {
+                const poll = () => ready() ? finish() : (pollId = setTimeout(poll, 50));
+                poll();
+            }
+        });
+    },
+
     async startDetection() {
         if (!this.video || !this.modelsLoaded) return;
+        const generation = this.cameraGeneration;
 
         const loop = async () => {
-            if (!this.stream) return;
+            if (!this.stream || generation !== this.cameraGeneration || this.photoCaptured) return;
             
-            const detections = await faceapi.detectSingleFace(this.video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.3 }));
+            let detections;
+            try { detections = await faceapi.detectSingleFace(this.video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.3 })); }
+            catch (error) { console.warn('Detection failed:', error.name); }
+            if (!this.stream || generation !== this.cameraGeneration) return;
             
             const overlay = document.getElementById('face-overlay');
             if (detections) {
@@ -167,14 +211,19 @@ const faceRecognition = {
                 if (registerBtn) registerBtn.disabled = false;
             } else {
                 if (overlay) overlay.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                const captureBtn = document.getElementById('btn-capture');
+                const registerBtn = document.getElementById('btn-register-face');
+                if (captureBtn) captureBtn.disabled = true;
+                if (registerBtn) registerBtn.disabled = true;
             }
 
-            if (this.stream) requestAnimationFrame(loop);
+            if (this.stream && generation === this.cameraGeneration) setTimeout(loop, 150);
         };
         loop();
     },
 
     stopCamera() {
+        this.cameraGeneration++;
         if (this.stream) {
             console.log('Stopping camera stream...');
             this.stream.getTracks().forEach(track => track.stop());
@@ -183,11 +232,27 @@ const faceRecognition = {
     },
 
     async capturePhoto() {
-        if (this.photoCaptured) return;
+        if (this.photoCaptured || this.capturing) return;
+        this.capturing = true;
+        const generation = this.cameraGeneration;
+        try {
+        await this.waitForCameraFrame(this.video);
+        if (!this.modelsLoaded) throw new Error('Sistem AI belum siap. Coba kembali.');
+        const frame = document.createElement('canvas');
+        const scale = Math.min(1, 640 / this.video.videoWidth);
+        frame.width = Math.round(this.video.videoWidth * scale);
+        frame.height = Math.round(this.video.videoHeight * scale);
+        const frameContext = frame.getContext('2d', { willReadFrequently: true });
+        frameContext.drawImage(this.video, 0, 0, frame.width, frame.height);
+        // Reject an empty/black frame even when video metadata was available.
+        const pixels = frameContext.getImageData(0, 0, frame.width, frame.height).data;
+        let brightness = 0;
+        for (let i = 0; i < pixels.length; i += 64) brightness += Math.max(pixels[i], pixels[i + 1], pixels[i + 2]);
+        if (brightness / Math.ceil(pixels.length / 64) < 2) throw new Error('Foto terlalu gelap atau kamera belum siap. Coba foto ulang di tempat terang.');
         
         // 1. Get current descriptor
         // 1. Get current descriptor - using higher input size for better accuracy
-        const detections = await faceapi.detectSingleFace(this.video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 }))
+        const detections = await faceapi.detectSingleFace(frame, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 }))
                                        .withFaceLandmarks()
                                        .withFaceDescriptor();
 
@@ -436,24 +501,9 @@ const faceRecognition = {
             isMatch = true; // Skip matching on registration
         }
 
-        // 3. SUCCESS: Save Captured frame with FORCED DOWN-SAMPLING to 640px
-        const ctx = this.canvas.getContext('2d');
-        const MAX_WIDTH = 640;
-        
-        // SAFETY: Fallback for videoWidth if not yet available or 0
-        const vWidth = this.video.videoWidth || 640;
-        const vHeight = this.video.videoHeight || 480;
-        const scale = Math.min(1, MAX_WIDTH / vWidth);
-        
-        this.canvas.width = vWidth * scale;
-        this.canvas.height = vHeight * scale;
-        
-        console.log(`Resizing capture: ${vWidth}x${vHeight} -> ${this.canvas.width}x${this.canvas.height}`);
-        ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
-        
-        // IMMEDIATELY Convert to Base64 and store it to prevent 'data:,' error
-        this.capturedPhotoBase64 = this.canvas.toDataURL('image/jpeg', 0.8);
-        console.log('Photo captured successfully! Data length:', this.capturedPhotoBase64.length);
+        if (generation !== this.cameraGeneration) return;
+        this.capturedPhotoBase64 = frame.toDataURL('image/jpeg', 0.75);
+        if (!/^data:image\/jpeg;base64,/.test(this.capturedPhotoBase64)) throw new Error('Tidak dapat mengambil foto kamera.');
 
         this.currentDescriptor = descriptor;
         this.photoCaptured = true;
@@ -538,6 +588,11 @@ const faceRecognition = {
         }
         
         this.checkCanSubmit();
+        } catch (error) {
+            toast.error(error.message || 'Gagal mengambil foto. Silakan foto ulang.');
+        } finally {
+            this.capturing = false;
+        }
     },
 
     async confirmAttendance() {
@@ -546,6 +601,10 @@ const faceRecognition = {
             return;
         }
 
+        if (!this.photoCaptured || !/^data:image\/jpeg;base64,/.test(this.capturedPhotoBase64 || '')) {
+            toast.error('Foto belum siap. Silakan ambil foto ulang.');
+            return;
+        }
         const selectedPoint = window.absensi ? window.absensi.getSelectedLocation() : null;
 
         const attendanceData = {
@@ -556,7 +615,7 @@ const faceRecognition = {
                 latitude: this.position.coords.latitude,
                 longitude: this.position.coords.longitude
             } : null,
-            photo: this.capturedPhotoBase64 || 'data:,'
+            photo: this.capturedPhotoBase64
         };
 
         storage.set('temp_attendance', attendanceData);
@@ -652,6 +711,8 @@ const faceRecognition = {
     },
 
     retakePhoto() {
+        this.stopCamera();
+        this.capturedPhotoBase64 = null;
         this.photoCaptured = false;
         const preview = document.getElementById('camera-preview');
         
@@ -772,17 +833,12 @@ const faceRecognition = {
 
         buttons.forEach(btn => {
             if (btn.el) {
-                // Remove old listeners by replacing the element or just setting onclick to null
-                btn.el.onclick = null;
-                
-                // Add both click and touchend for mobile responsiveness
-                ['click', 'touchstart'].forEach(eventType => {
-                    btn.el.addEventListener(eventType, (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        btn.handler();
-                    }, { passive: false });
-                });
+                // Native clicks support touch and keyboard; replace the handler on every init.
+                btn.el.onclick = e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!btn.el.disabled) btn.handler();
+                };
             }
         });
     },
