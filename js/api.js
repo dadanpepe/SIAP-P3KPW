@@ -13,32 +13,53 @@ const api = {
 
     // ========== CORE REQUEST ==========
 
+    _inflight: new Map(),
+    _readCache: new Map(),
+    _cacheVersion: 0,
+
+    clearReadCache() {
+        this._cacheVersion++;
+        this._readCache.clear();
+        this._inflight.clear();
+    },
+
     async request(action, data = {}) {
-        // Jika API_BASE_URL kosong, gunakan localStorage fallback
-        if (!API_BASE_URL) {
-            return this._localFallback(action, data);
-        }
-
-        try {
-            const response = await fetch(API_BASE_URL, {
-                method: 'POST',
-                redirect: 'follow',
-                headers: { 'Content-Type': 'text/plain' },
-                body: JSON.stringify({ action, ...data })
-            });
-
-            const text = await response.text();
+        if (!API_BASE_URL) return this._localFallback(action, data);
+        const isRead = action.startsWith('get');
+        const key = JSON.stringify([action, data]);
+        const ttl = { getSettings: 60000, getShifts: 60000, getTeamPresence: 15000 }[action] || 0;
+        const version = this._cacheVersion;
+        const cached = this._readCache.get(key);
+        const clone = value => JSON.parse(JSON.stringify(value));
+        if (isRead && cached && cached.expires > Date.now()) return clone(cached.value);
+        if (isRead && this._inflight.has(key)) return clone(await this._inflight.get(key));
+        if (!isRead) this.clearReadCache();
+        const run = (async () => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 45000);
             try {
-                return JSON.parse(text);
-            } catch (e) {
-                console.error('Failed to parse response:', text.substring(0, 200));
-                return { success: false, error: 'Invalid response from server' };
+                const response = await fetch(API_BASE_URL, {
+                    method: 'POST', redirect: 'follow', signal: controller.signal,
+                    headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ action, ...data })
+                });
+                if (!response.ok) return { success: false, error: 'Server tidak dapat diakses. Silakan coba lagi.' };
+                const result = JSON.parse(await response.text());
+                if (isRead && ttl && result.success && version === this._cacheVersion) {
+                    this._readCache.set(key, { value: result, expires: Date.now() + ttl });
+                }
+                return result;
+            } catch (error) {
+                console.error('API request failed:', action, error.name);
+                return { success: false, error: error.name === 'AbortError'
+                    ? 'Server belum merespons. Sinkronkan untuk memeriksa apakah absensi sudah tersimpan sebelum mencoba kembali.'
+                    : 'Koneksi ke server gagal. Periksa jaringan dan sinkronkan ulang.' };
+            } finally {
+                clearTimeout(timeout);
             }
-        } catch (error) {
-            console.error('API Error:', error);
-            // Fallback to localStorage on network error
-            return this._localFallback(action, data);
-        }
+        })();
+        if (isRead) this._inflight.set(key, run);
+        try { return clone(await run); }
+        finally { if (this._inflight.get(key) === run) this._inflight.delete(key); }
     },
 
     // ========== AUTH ==========
@@ -57,11 +78,11 @@ const api = {
         return this.request('changePassword', { userId, oldPassword, newPassword });
     },
 
-    async getEmployeeProfile(userId) {
+    async getEmployeeProfile(userId, email, role) {
         if (!API_BASE_URL) {
             return { success: true, data: {} };
         }
-        return this.request('getEmployeeProfile', { userId });
+        return this.request('getEmployeeProfile', { userId, email, role });
     },
 
     async updateOnlineStatus(userId, isOnline) {
@@ -135,6 +156,14 @@ const api = {
             return { success: true, data: data };
         }
         return this.request('saveAttendance', data);
+    },
+
+    async getAttendancePhoto(userId, id, attendanceAction) {
+        return this.request('getAttendancePhoto', { userId, id, attendanceAction });
+    },
+
+    async getTeamPresence() {
+        return API_BASE_URL ? this.request('getTeamPresence') : this.getEmployees();
     },
 
     async getAllAttendance(month) {
@@ -474,6 +503,8 @@ window.getAvatarUrl = function (emp) {
 window.normalizeImageUrl = function (url) {
     if (!url || typeof url !== 'string') return url;
     if (url.startsWith('data:image')) return url;
+    const thumbnail = url.match(/^https:\/\/drive\.google\.com\/thumbnail\?id=([a-zA-Z0-9_-]+)/);
+    if (thumbnail) return `https://lh3.googleusercontent.com/d/${thumbnail[1]}`;
     
     // Detect Google Drive URLs and convert to direct link format
     const driveRegex = /(?:drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:[a-zA-Z0-9=&]*&)?id=)|docs\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:[a-zA-Z0-9=&]*&)?id=))([a-zA-Z0-9_-]+)/;
